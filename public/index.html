@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>НЕТРАН // Архитектура СЕТИ</title>
-  <link rel="stylesheet" href="/style.css?v=ru4">
+  <link rel="stylesheet" href="/style.css?v=programs3">
 </head>
 <body>
   <div class="noise"></div>
@@ -31,21 +31,38 @@
       </div>
     </section>
 
+    <section class="network-library panel" aria-labelledby="networkLibraryTitle">
+      <div class="network-library-head">
+        <div><span class="eyebrow">ДОСТУПНЫЕ ЦЕЛИ</span><h2 id="networkLibraryTitle">СЕТИ</h2></div>
+        <div class="network-library-actions"><button id="scanRequestBtn" class="primary hidden">ЗАПРОСИТЬ СКАНИРОВАНИЕ</button><button id="newNetworkBtn" class="primary hidden">+ НОВАЯ СЕТЬ</button></div>
+      </div>
+      <div id="networkList" class="network-list" aria-live="polite"></div>
+      <form id="gmScanForm" class="scan-review hidden">
+        <div><span class="eyebrow">ВХОДЯЩИЙ ЗАПРОС</span><h3>ВЫБЕРИТЕ СЕТИ ДЛЯ НЕТРАННЕРА</h3></div>
+        <div id="scanNetworkChoices" class="scan-network-choices"></div>
+        <button class="primary">ОТПРАВИТЬ РЕЗУЛЬТАТ СКАНИРОВАНИЯ</button>
+      </form>
+    </section>
+
     <section class="dashboard">
       <aside class="left-rail">
         <article class="panel runner-card">
           <div class="panel-title"><span>01</span><h2>НЕТРАННЕР</h2></div>
           <div class="runner-id"><div class="avatar">А</div><div><strong id="runnerName">АЛЛОЙ</strong><small>ОПЕРАТИВНИК НА МЕСТЕ</small></div></div>
           <div class="stat-pair"><div><span>ИНТЕРФЕЙС</span><b id="interfaceStat">4</b></div><div><span>БОНУС СКОРОСТИ</span><b id="speedStat">+0</b></div></div>
-          <div class="meter-head"><span>ЗДОРОВЬЕ МОЗГА</span><b id="brainText">30 / 30</b></div>
-          <div class="meter"><i id="brainMeter"></i></div>
+          <div class="meter-head"><span>ЗДОРОВЬЕ</span><b id="healthText">30 / 30</b></div>
+          <div class="meter"><i id="healthMeter"></i></div>
+          <div id="burningStatus" class="burning-status hidden">🔥 ГОРЕНИЕ: −2 ЗДОРОВЬЯ В КОНЦЕ ХОДА</div>
+          <div class="runner-wallet"><span>КОШЕЛЁК НЕТРАННЕРА</span><b><i>€$</i> <span id="walletBalance">500</span> eb</b><small>ОПЛАТА ЗАГРУЗОК</small></div>
           <div class="action-orbit"><div><span id="actionsRemain">3</span><small>СЕТЕВЫХ ДЕЙСТВИЙ<br>ОСТАЛОСЬ</small></div><b id="actionPips"></b></div>
           <button id="nextTurnBtn" class="wide">ЗАВЕРШИТЬ ХОД ↗</button>
         </article>
 
         <article class="panel programs-card">
           <div class="panel-title"><span>02</span><h2>ПРОГРАММЫ</h2></div>
+          <div class="deck-capacity"><span>СЛОТЫ КИБЕРДЕКИ</span><b id="deckSlotsText">3 / 7</b></div>
           <div id="programList"></div>
+          <button id="downloadProgramBtn" class="wide hidden">+ ЗАГРУЗИТЬ ПРОГРАММУ · 1 ДЕЙСТВИЕ</button>
         </article>
       </aside>
 
@@ -55,16 +72,32 @@
           <div class="architecture-meta"><b id="architectureIntel">КОЛИЧЕСТВО ЭТАЖЕЙ НЕИЗВЕСТНО</b><small id="pathfinderIntel"></small><div class="legend"><i class="file"></i>ДАННЫЕ <i class="gate"></i>ПАРОЛЬ <i class="ice"></i>ЛЁД</div></div>
         </div>
         <div id="architecture" class="architecture" aria-live="polite"></div>
+        <section id="battlePanel" class="battle-panel hidden" aria-live="assertive">
+          <div class="battle-title"><div><span>БОЙ В СЕТИ</span><h2 id="battleName">ЧЁРНЫЙ ЛЁД</h2></div><b id="battleRound">РАУНД 1</b></div>
+          <div class="battle-versus">
+            <div><small>НЕТРАННЕР</small><strong id="battleRunner">ИНТЕРФЕЙС 4</strong><span id="battleInitiativeRunner">ВСТРЕЧА 0</span></div>
+            <i>VS</i>
+            <div><small>ЧЁРНЫЙ ЛЁД</small><strong id="battleIceStats">АТК 0 · ЗАЩ 0</strong><span id="battleInitiativeIce">ВСТРЕЧА 0</span></div>
+          </div>
+          <div class="ice-rez-head"><span>REZ ЛЬДА</span><b id="iceRezText">0 / 0</b></div>
+          <div class="meter ice-rez"><i id="iceRezMeter"></i></div>
+          <p id="battleEffect"></p>
+          <div class="battle-actions">
+            <button data-battle-action="zap">РАЗРЯД · 1d6</button>
+            <button data-battle-action="program" data-program-id="p2">МЕЧ · 3d6</button>
+            <button data-battle-action="slide">УСКОЛЬЗНУТЬ</button>
+            <button data-battle-action="extinguish">ПОТУШИТЬ ОГОНЬ</button>
+            <button data-battle-action="iceAttack" class="ice-turn">АТАКА ЛЬДА</button>
+          </div>
+          <div id="runnerIceBattleActions" class="runner-ice-actions"></div>
+        </section>
         <div class="quick-actions">
-          <button data-meat-label="Сканер">СКАНЕР</button>
           <button data-action-label="Бэкдор">БЭКДОР</button>
           <button data-action-label="Плащ">ПЛАЩ</button>
           <button data-action-label="Управление">УПРАВЛЕНИЕ</button>
           <button data-action-label="Опознание">ОПОЗНАНИЕ</button>
           <button data-action-label="Первопроходец">ПЕРВОПРОХОДЕЦ</button>
-          <button data-action-label="Ускользнуть">УСКОЛЬЗНУТЬ</button>
           <button data-action-label="Вирус">ВИРУС</button>
-          <button data-action-label="Разряд">РАЗРЯД</button>
         </div>
       </section>
 
@@ -74,9 +107,14 @@
           <form id="runnerForm" class="compact-form">
             <label>Имя<input name="name"></label>
             <label>Интерфейс<input name="interface" type="number" min="1" max="10"></label>
-            <label>Здоровье мозга<input name="brainHP" type="number" min="0"></label>
-            <label>Максимум<input name="maxBrainHP" type="number" min="1"></label>
+            <label>Здоровье<input name="health" type="number" min="0"></label>
+            <label>Максимум здоровья<input name="maxHealth" type="number" min="1"></label>
+            <label class="full">Баланс кошелька (eb)<input name="wallet" type="number" min="0" step="1"></label>
             <button>ОБНОВИТЬ НЕТРАННЕРА</button>
+          </form>
+          <form id="walletTopUpForm" class="wallet-top-up">
+            <label>Добавить в кошелёк (eb)<input name="amount" type="number" min="1" step="1" value="100" required></label>
+            <button class="primary">+ ПОПОЛНИТЬ</button>
           </form>
           <form id="nodeForm" class="compact-form add-floor">
             <label>Новый этаж<input name="title" placeholder="Название узла" required></label>
@@ -91,6 +129,7 @@
             <small class="form-hint">Формат: диапазон результата : число этажей. Пароль с большей СЛ всё равно остановит обзор.</small>
             <button>СОХРАНИТЬ ТАБЛИЦУ</button>
           </form>
+          <button id="undoRunnerActionBtn" class="wide">ОТМЕНИТЬ ПОСЛЕДНЕЕ ДЕЙСТВИЕ НЕТРАННЕРА</button>
           <button id="resetBtn" class="danger wide">СБРОСИТЬ СЕССИЮ</button>
         </article>
 
@@ -103,8 +142,9 @@
           <summary><span>04</span> КРАТКИЕ ПРАВИЛА</summary>
           <div class="rules-body">
             <p><b>Ход:</b> одно Мясное Действие или все доступные Сетевые Действия. Перемещаться можно всегда.</p>
-            <p><b>Сетевые Действия:</b> Интерфейс 1–3: 2; 4–6: 3; 7–9: 4; 10: 5.</p>
+            <p><b>Сетевые Действия:</b> Интерфейс 1–3: 1; 4–6: 2; 7–9: 3; 10: 4.</p>
             <p><b>Проверки:</b> Интерфейс + 1d10 против СЛ. Результат должен превысить СЛ.</p>
+            <p><b>Критический d10:</b> при 10 бросьте ещё раз и прибавьте результат; при 1 бросьте ещё раз и вычтите результат.</p>
             <p><b>Перемещение:</b> можно пройти любое число открытых этажей; Пароли и другие препятствия блокируют путь.</p>
             <p><b>Чёрный ЛЁД:</b> при встрече Интерфейс + Скорость + 1d10 против Скорости ЛЬДА + 1d10. При победе ЛЁД немедленно применяет Эффект.</p>
             <p><b>Ускользнуть:</b> один раз за Ход, Интерфейс + 1d10 против Восприятия ЛЬДА + 1d10.</p>
@@ -122,9 +162,53 @@
       <label>Название<input name="label" value="Проверка Интерфейса"></label>
       <label>Бонус<input name="bonus" type="number" value="4"></label>
       <label><span id="dvLabel">СЛ (0 для встречной проверки)</span><input name="dv" type="number" value="8"></label>
-      <div class="dialog-actions"><button value="cancel">ОТМЕНА</button><button id="rollSubmit" value="default" class="primary">БРОСИТЬ</button></div>
+      <div class="dialog-actions"><button value="cancel">ОТМЕНА</button><button value="auto" class="primary">БРОСИТЬ АВТОМАТИЧЕСКИ</button><button value="physical" class="primary">БРОСИТЬ ФИЗИЧЕСКИ</button></div>
     </form>
   </dialog>
-  <script src="/app.js?v=ru8"></script>
+  <dialog id="d10Dialog">
+    <form method="dialog" id="d10Form">
+      <div class="panel-title"><span>D10</span><h2>ФИЗИЧЕСКИЙ БРОСОК</h2></div>
+      <p class="form-hint">Введите результат физического броска D10.</p>
+      <label>РЕЗУЛЬТАТ D10 (1–10)<input name="d10" type="number" min="1" max="10" step="1" autofocus></label>
+      <label id="criticalD10Label" hidden>КРИТИЧЕСКИЙ D10 (1–10)<input name="criticalD10" type="number" min="1" max="10" step="1"></label>
+      <div class="dialog-actions"><button value="cancel">ОТМЕНА</button><button value="default" class="primary">ПОДТВЕРДИТЬ</button></div>
+    </form>
+  </dialog>
+  <dialog id="networkDialog">
+    <form method="dialog" id="networkForm">
+      <div class="panel-title"><span>NET</span><h2 id="networkDialogTitle">НОВАЯ СЕТЬ</h2></div>
+      <input name="id" type="hidden">
+      <label>Название<input name="name" maxlength="80" required></label>
+      <div class="dialog-actions"><button value="cancel" formnovalidate>ОТМЕНА</button><button value="default" class="primary">СОХРАНИТЬ</button></div>
+    </form>
+  </dialog>
+  <dialog id="programDialog">
+    <form method="dialog" id="programForm">
+      <div class="panel-title"><span>PROG</span><h2>ЗАГРУЗИТЬ ПРОГРАММУ</h2></div>
+      <section id="programGroupStep">
+        <p class="form-hint">Сначала выберите группу Программ.</p>
+        <div id="programGroups" class="program-groups"></div>
+      </section>
+      <section id="programChoiceStep" class="hidden">
+        <div class="program-choice-head"><button id="programGroupBackBtn" type="button">← ГРУППЫ</button><b id="programGroupTitle"></b></div>
+        <p class="form-hint">Выберите Программу. Стоимость будет списана из кошелька при загрузке.</p>
+        <div id="programCatalog" class="program-catalog"></div>
+      </section>
+      <div class="dialog-actions"><button value="cancel" formnovalidate>ОТМЕНА</button><button id="programSubmitBtn" value="default" class="primary hidden">ЗАГРУЗИТЬ · 1 ДЕЙСТВИЕ</button></div>
+    </form>
+  </dialog>
+  <dialog id="nodeDialog">
+    <form method="dialog" id="nodeEditForm">
+      <div class="panel-title"><span>NODE</span><h2>РЕДАКТОР УЗЛА</h2></div>
+      <input name="id" type="hidden">
+      <label>Название<input name="title" maxlength="120" required></label>
+      <label>Тип<select name="nodeType"><option>Пароль</option><option>Файл</option><option>Управляющий Узел</option><option>Чёрный ЛЁД</option></select></label>
+      <label>СЛ<input name="dv" type="number" min="0" max="30" required></label>
+      <label>ЛЁД<select name="iceName"><option>Аспид</option><option>Великан</option><option>Адская Гончая</option></select></label>
+      <label>Описание<textarea name="details" rows="5" maxlength="1000"></textarea></label>
+      <div class="dialog-actions"><button value="cancel" formnovalidate>ОТМЕНА</button><button value="default" class="primary">СОХРАНИТЬ</button></div>
+    </form>
+  </dialog>
+  <script src="/app.js?v=programs5"></script>
 </body>
 </html>
