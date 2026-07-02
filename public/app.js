@@ -72,7 +72,7 @@ function nodeDepthFrom(rootId) {
   return depth;
 }
 function isBlockingNode(node) {
-  return node && node.type === 'Пароль' && !node.cleared;
+  return node && !node.cleared && (node.type === 'Пароль' || (node.type === 'Программа' && node.ice));
 }
 function getZoom(canvas) {
   const c = canvas || $('#architecture')?.querySelector('.graph-canvas');
@@ -276,7 +276,7 @@ function openNodeDetails(nodeId) {
   const terminal = (state.terminalNodeIds || []).includes(nodeIdValue);
   const current = nodeIdValue === state.runner.floorId;
   const status = [entry ? 'ВХОД' : '', terminal ? 'ТЕРМИНАЛ' : '', node.revealed ? 'ОТКРЫТ' : 'СКРЫТ', node.cleared ? 'ПРЕОДОЛЕН' : 'АКТИВЕН', current ? 'НЕТРАННЕР ЗДЕСЬ' : ''].filter(Boolean);
-  const stats = node.type === 'Чёрный ЛЁД' && node.ice
+  const stats = node.type === 'Программа' && node.ice
     ? [['ВОСПРИЯТИЕ', node.ice.perception], ['СКОРОСТЬ', node.ice.speed], ['АТАКА', node.ice.attack], ['ЗАЩИТА', node.ice.defense], ['REZ', `${node.currentRez ?? node.ice.rez} / ${node.ice.rez}`]]
     : [['СЛ', Number(node.dv || 0)]];
   $('#nodeInfoType').textContent = node.type;
@@ -309,6 +309,7 @@ function openNodeDetails(nodeId) {
       form.elements.id.value = nodeIdValue;
       form.elements.title.value = node.title;
       form.elements.nodeType.value = node.type;
+      form.elements.iceCatalogId.value = node.iceCatalogId || '';
       form.elements.dv.value = Number(node.dv || 0);
       form.elements.details.value = node.details || '';
       fillNodeLinkOptions(form.elements.edgeIds, nodeNeighbors(nodeIdValue), nodeIdValue);
@@ -386,6 +387,14 @@ function render() {
   renderPrograms();
   renderLog();
   if (role === 'gm') {
+    const enemyPrograms = (state.programCatalog || []).filter(program => program.class === 'Чёрный ЛЁД');
+    $$('.enemy-program-select').forEach(select => {
+      const previous = select.value;
+      select.innerHTML = '<option value="">— ВЫБЕРИТЕ ЛЁД —</option>' + enemyPrograms.map(program =>
+        `<option value="${esc(program.catalogId)}">${esc(program.name)} · ВСП ${program.perception} · СКО ${program.speed} · АТК ${program.attack} · ЗАЩ ${program.defense} · REZ ${program.rez}</option>`
+      ).join('');
+      select.value = previous;
+    });
     fillGmForm();
     fillNodeLinkOptions($('#nodeForm').elements.edgeIds, [state.entryNodeId].filter(Boolean));
     const pfResolve = $('#pathfinderResolve');
@@ -452,7 +461,7 @@ function renderArchitecture() {
     const terminal = (state.terminalNodeIds || []).includes(node.id);
     const canMoveHere = role === 'runner' && !movementLocked && node.revealed && movableNodeIds.has(node.id) && (!isBlockingNode(currentNode) || nodeDepthFrom(state.entryNodeId).get(node.id) <= nodeDepthFrom(state.entryNodeId).get(currentNode.id));
     const classes = ['arch-node', canMoveHere ? 'movable' : '', nodeClass(node.type), current ? 'current' : '', entry ? 'entry' : '', terminal ? 'terminal' : '', node.cleared ? 'cleared' : '', node.revealed ? '' : 'concealed'].join(' ');
-    const stat = node.type === 'Чёрный ЛЁД' && node.ice
+    const stat = node.type === 'Программа' && node.ice
       ? `<span>СКО ${node.ice.speed}</span><span>АТК ${node.ice.attack}</span><span>ЗАЩ ${node.ice.defense}</span><span>REZ ${node.ice.rez}</span>`
       : node.dv ? `<span>СЛ ${node.dv}</span>` : '';
     const badges = `${entry ? '<b>ВХОД</b>' : ''}${terminal ? '<b>ТЕРМИНАЛ</b>' : ''}`;
@@ -797,6 +806,7 @@ function renderBattle() {
     if (kind === 'iceAttack') button.disabled = role !== 'gm' || currentTurn !== 'ice';
     else if (kind === 'program') {
       button.dataset.programId = attackProgram?.id || '';
+      button.textContent = attackProgram ? `${attackProgram.name.toUpperCase()} · ${attackProgram.catalogId === 'sword' ? '3d6' : '2d6'}` : 'НЕТ АКТИВНОЙ АТАКУЮЩЕЙ ПРОГРАММЫ';
       button.disabled = role !== 'runner' || currentTurn !== 'runner' || !attackProgram;
     }
     else if (kind === 'extinguish') button.disabled = role !== 'runner' || currentTurn !== 'runner' || !state.runner.burning;

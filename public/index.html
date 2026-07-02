@@ -115,6 +115,7 @@
           <form id="nodeForm" class="compact-form add-floor">
             <label>Новый узел<input name="title" placeholder="Название узла" required></label>
             <label>Тип<select name="nodeType"><option>Пароль</option><option>Файл</option><option>Управляющий Узел</option><option>Программа</option></select></label>
+            <label>Вражеская программа<select name="iceCatalogId" class="enemy-program-select"></select></label>
             <label>СЛ<input name="dv" type="number" value="8"></label>
             <small class="form-hint full">Новый узел подключается ко входу. Изменить связь можно через редактор узла.</small>
             <button>ДОБАВИТЬ УЗЕЛ</button>
@@ -196,6 +197,7 @@
       <input name="id" type="hidden">
       <label>Название<input name="title" maxlength="120" required></label>
       <label>Тип<select name="nodeType"><option>Пароль</option><option>Файл</option><option>Управляющий Узел</option><option>Программа</option></select></label>
+      <label>Вражеская программа<select name="iceCatalogId" class="enemy-program-select"></select></label>
       <label>СЛ<input name="dv" type="number" min="0" max="30" required></label>
       <label>Связи<select name="edgeIds" multiple size="6"></select></label>
       <label>Описание<textarea name="details" rows="5" maxlength="1000"></textarea></label>
