@@ -210,6 +210,17 @@
       <section><small>ОПИСАНИЕ</small><p id="nodeInfoDetails"></p></section>
       <section id="nodeInfoEffectWrap"><small>ЭФФЕКТ</small><p id="nodeInfoEffect"></p></section>
       <section><small>СВЯЗИ</small><div id="nodeInfoLinks" class="node-info-links"></div></section>
+      <div id="nodeInfoGmTools" class="node-info-gm-tools hidden">
+        <hr>
+        <label class="dv-editor">СЛ <input id="nodeInfoDv" type="number" min="0" max="30" step="1" required></label>
+        <div class="node-info-gm-actions">
+          <button id="nodeInfoSetEntry">ВХОД</button>
+          <button id="nodeInfoToggleReveal">ОТКРЫТЬ</button>
+          <button id="nodeInfoToggleClear">ПРЕОДОЛЕНО</button>
+          <button id="nodeInfoEdit">ИЗМЕНИТЬ</button>
+          <button id="nodeInfoDelete" class="danger">×</button>
+        </div>
+      </div>
       <div class="dialog-actions"><button value="cancel">ЗАКРЫТЬ</button><button id="nodeInfoMove" type="button" class="primary">ПЕРЕМЕСТИТЬСЯ СЮДА</button></div>
     </form>
   </dialog>

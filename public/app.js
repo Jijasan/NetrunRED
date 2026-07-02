@@ -254,10 +254,11 @@ function renderedEdgeCrossings() {
 function openNodeDetails(nodeId) {
   const node = state.nodes.find(item => item.id === nodeId);
   if (!node) return;
-  const neighbors = nodeNeighbors(node.id).map(id => state.nodes.find(item => item.id === id)).filter(Boolean);
-  const entry = node.id === state.entryNodeId;
-  const terminal = (state.terminalNodeIds || []).includes(node.id);
-  const current = node.id === state.runner.floorId;
+  const nodeIdValue = node.id;
+  const neighbors = nodeNeighbors(nodeIdValue).map(id => state.nodes.find(item => item.id === id)).filter(Boolean);
+  const entry = nodeIdValue === state.entryNodeId;
+  const terminal = (state.terminalNodeIds || []).includes(nodeIdValue);
+  const current = nodeIdValue === state.runner.floorId;
   const status = [entry ? 'ВХОД' : '', terminal ? 'ТЕРМИНАЛ' : '', node.revealed ? 'ОТКРЫТ' : 'СКРЫТ', node.cleared ? 'ПРЕОДОЛЕН' : 'АКТИВЕН', current ? 'НЕТРАННЕР ЗДЕСЬ' : ''].filter(Boolean);
   const stats = node.type === 'Чёрный ЛЁД' && node.ice
     ? [['ВОСПРИЯТИЕ', node.ice.perception], ['СКОРОСТЬ', node.ice.speed], ['АТАКА', node.ice.attack], ['ЗАЩИТА', node.ice.defense], ['REZ', `${node.currentRez ?? node.ice.rez} / ${node.ice.rez}`]]
@@ -270,11 +271,41 @@ function openNodeDetails(nodeId) {
   $('#nodeInfoEffect').textContent = node.ice?.effect || '';
   $('#nodeInfoEffectWrap').classList.toggle('hidden', !node.ice?.effect);
   $('#nodeInfoLinks').innerHTML = neighbors.length ? neighbors.map(item => `<span>${esc(item.title)}<small>${esc(item.type)}</small></span>`).join('') : '<span>Нет связей</span>';
+  const gmTools = $('#nodeInfoGmTools');
+  gmTools.classList.toggle('hidden', role !== 'gm');
+  if (role === 'gm') {
+    const dvInput = $('#nodeInfoDv');
+    dvInput.value = Number(node.dv || 0);
+    dvInput.onchange = () => { action('updateNodeDv', { id: nodeIdValue, dv: Number(dvInput.value) }); };
+    const entryBtn = $('#nodeInfoSetEntry');
+    entryBtn.disabled = entry;
+    entryBtn.onclick = () => action('setEntryNode', { id: nodeIdValue });
+    const revealBtn = $('#nodeInfoToggleReveal');
+    revealBtn.disabled = entry;
+    revealBtn.textContent = node.revealed ? 'СКРЫТЬ' : 'ОТКРЫТЬ';
+    revealBtn.onclick = () => action('toggleReveal', { id: nodeIdValue });
+    const clearBtn = $('#nodeInfoToggleClear');
+    clearBtn.textContent = node.cleared ? 'ВОССТАНОВИТЬ' : 'ПРЕОДОЛЕНО';
+    clearBtn.onclick = () => action('toggleClear', { id: nodeIdValue });
+    const editBtn = $('#nodeInfoEdit');
+    editBtn.onclick = () => {
+      const form = $('#nodeEditForm');
+      form.elements.id.value = nodeIdValue;
+      form.elements.title.value = node.title;
+      form.elements.nodeType.value = node.type;
+      form.elements.dv.value = Number(node.dv || 0);
+      form.elements.details.value = node.details || '';
+      fillNodeLinkOptions(form.elements.edgeIds, nodeNeighbors(nodeIdValue), nodeIdValue);
+      $('#nodeDialog').showModal();
+    };
+    const deleteBtn = $('#nodeInfoDelete');
+    deleteBtn.onclick = () => { if (confirm(`Удалить узел «${node.title}»?`)) action('deleteNode', { id: nodeIdValue }); };
+  }
   const moveButton = $('#nodeInfoMove');
   const movementLocked = Boolean(state.battle?.active && state.battle.nodeId === state.runner.floorId);
-  const canMoveHere = node.revealed && nodeNeighbors(state.runner.floorId).includes(node.id);
+  const canMoveHere = node.revealed && nodeNeighbors(state.runner.floorId).includes(nodeIdValue);
   moveButton.classList.toggle('hidden', role !== 'runner' || current || movementLocked || !canMoveHere);
-  moveButton.dataset.nodeId = node.id;
+  moveButton.dataset.nodeId = nodeIdValue;
   $('#nodeInfoDialog').showModal();
 }
 
@@ -402,30 +433,18 @@ function renderArchitecture() {
     const current = node.id === state.runner.floorId;
     const entry = node.id === state.entryNodeId;
     const terminal = (state.terminalNodeIds || []).includes(node.id);
-    const pathfinderSelectable = role === 'gm' && Boolean(state.session?.pathfinderPending) && !node.revealed;
-    const pathfinderSelected = pathfinderSelectable && pathfinderSelectedNodeIds.has(node.id);
     const canMoveHere = role === 'runner' && !movementLocked && node.revealed && movableNodeIds.has(node.id);
-    const classes = ['arch-node', canMoveHere ? 'movable' : '', nodeClass(node.type), current ? 'current' : '', entry ? 'entry' : '', terminal ? 'terminal' : '', node.cleared ? 'cleared' : '', node.revealed ? '' : 'concealed', pathfinderSelectable ? 'pathfinder-selectable' : '', pathfinderSelected ? 'pathfinder-selected' : ''].join(' ');
+    const classes = ['arch-node', canMoveHere ? 'movable' : '', nodeClass(node.type), current ? 'current' : '', entry ? 'entry' : '', terminal ? 'terminal' : '', node.cleared ? 'cleared' : '', node.revealed ? '' : 'concealed'].join(' ');
     const stat = node.type === 'Чёрный ЛЁД' && node.ice
       ? `<span>СКО ${node.ice.speed}</span><span>АТК ${node.ice.attack}</span><span>ЗАЩ ${node.ice.defense}</span><span>REZ ${node.ice.rez}</span>`
       : node.dv ? `<span>СЛ ${node.dv}</span>` : '';
-    const dvEditor = role === 'gm' && node.type !== 'Чёрный ЛЁД'
-      ? `<label class="dv-editor">${node.type === 'Пароль' ? 'СЛ ПАРОЛЯ' : 'СЛ ПРОВЕРКИ'} <input data-node-dv="${node.id}" aria-label="Сложность проверки ${esc(node.title)}" type="number" min="0" max="30" step="1" value="${Number(node.dv || 0)}" required></label>`
-      : '';
-    const linked = nodeNeighbors(node.id)
-      .map(id => state.nodes.find(item => item.id === id))
-      .filter(Boolean)
-      .map(item => `<span>${esc(item.title)}</span>`)
-      .join('') || '<span>НЕТ СВЯЗЕЙ</span>';
     const badges = `${entry ? '<b>ВХОД</b>' : ''}${terminal ? '<b>ТЕРМИНАЛ</b>' : ''}`;
-    const gmTools = role === 'gm' ? `<div class="node-tools">${dvEditor}<button data-entry="${node.id}"${entry ? ' disabled' : ''}>ВХОД</button><button data-edit-node="${node.id}">ИЗМЕНИТЬ</button><button data-reveal="${node.id}"${entry ? ' disabled' : ''}>${node.revealed ? 'СКРЫТЬ' : 'ОТКРЫТЬ'}</button><button data-clear="${node.id}">${node.cleared ? 'ВОССТАНОВИТЬ' : 'ПРЕОДОЛЕНО'}</button><button data-delete="${node.id}"${entry ? ' disabled' : ''}>×</button></div>` : '';
     const position = planarPositions?.get(node.id);
-    const connectionPorts = role === 'gm' ? `<button type="button" class="node-port input-port" data-connect-to="${node.id}" aria-label="Вход соединения в ${esc(node.title)}" title="Вход соединения"></button><button type="button" class="node-port output-port" data-connect-from="${node.id}" aria-label="Начать соединение из ${esc(node.title)}" title="Перетащите к верхнему порту другого узла"></button>` : '';
-    return `<article class="${classes}" data-node-id="${node.id}"${position ? ` style="--node-x:${position.x}%;--node-y:${position.y}%"` : ''}${role === 'gm' ? ' data-positionable="true"' : ''}${pathfinderSelectable ? ` data-pathfinder-node="${node.id}" title="Выбрать узел для Первопроходца"` : role === 'gm' ? ' title="Перетащите в любую позицию без пересечения рёбер"' : ''}${canMoveHere ? ` data-move="${node.id}"` : ''}>
+    return `<article class="${classes}" data-node-id="${node.id}"${position ? ` style="--node-x:${position.x}%;--node-y:${position.y}%"` : ''}${role === 'gm' ? ' data-positionable="true"' : ''}${canMoveHere ? ` data-move="${node.id}"` : ''}>
       <div class="floor-no">С${String(depth).padStart(2, '0')}.${String(index + 1).padStart(2, '0')}</div>
       <div class="node-glyph">${nodeIcon(node.type)}</div>
-      <div class="node-copy"><small>${esc(node.type)} ${badges}</small><h3>${esc(node.title)}</h3><p>${esc(node.details || '')}</p><div class="node-links">${linked}</div><div class="node-stats">${stat}</div></div>
-      ${current ? `<b class="runner-marker">${movementLocked ? 'БОЙ // ДВИЖЕНИЕ ЗАБЛОКИРОВАНО' : 'НЕТРАННЕР ЗДЕСЬ'}</b>` : ''}${gmTools}${connectionPorts}
+      <div class="node-copy"><small>${esc(node.type)} ${badges}</small><h3>${esc(node.title)}</h3><div class="node-stats">${stat}</div></div>
+      ${current ? `<b class="runner-marker">${movementLocked ? 'БОЙ // ДВИЖЕНИЕ ЗАБЛОКИРОВАНО' : 'НЕТРАННЕР ЗДЕСЬ'}</b>` : ''}
     </article>`;
   };
   const hasGraph = layers.length && planarPositions;
