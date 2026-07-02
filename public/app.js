@@ -58,6 +58,22 @@ function nodeLabel(node) {
   return node ? `${node.title} [${node.type}]` : '';
 }
 
+function nodeDepthFrom(rootId) {
+  const depth = new Map([[rootId, 0]]);
+  const queue = [rootId];
+  for (let i = 0; i < queue.length; i++) {
+    for (const nextId of nodeNeighbors(queue[i])) {
+      if (!depth.has(nextId)) {
+        depth.set(nextId, depth.get(queue[i]) + 1);
+        queue.push(nextId);
+      }
+    }
+  }
+  return depth;
+}
+function isBlockingNode(node) {
+  return node && node.type === 'Пароль' && !node.cleared;
+}
 function getZoom(canvas) {
   const c = canvas || $('#architecture')?.querySelector('.graph-canvas');
   return parseFloat(c?.dataset?.zoom || '1');
@@ -303,7 +319,8 @@ function openNodeDetails(nodeId) {
   }
   const moveButton = $('#nodeInfoMove');
   const movementLocked = Boolean(state.battle?.active && state.battle.nodeId === state.runner.floorId);
-  const canMoveHere = node.revealed && nodeNeighbors(state.runner.floorId).includes(nodeIdValue);
+  const runnerNode = state.nodes.find(n => n.id === state.runner.floorId);
+  const canMoveHere = node.revealed && nodeNeighbors(state.runner.floorId).includes(nodeIdValue) && (!isBlockingNode(runnerNode) || nodeDepthFrom(state.entryNodeId).get(nodeIdValue) <= nodeDepthFrom(state.entryNodeId).get(runnerNode.id));
   moveButton.classList.toggle('hidden', role !== 'runner' || current || movementLocked || !canMoveHere);
   moveButton.dataset.nodeId = nodeIdValue;
   $('#nodeInfoDialog').showModal();
@@ -433,7 +450,7 @@ function renderArchitecture() {
     const current = node.id === state.runner.floorId;
     const entry = node.id === state.entryNodeId;
     const terminal = (state.terminalNodeIds || []).includes(node.id);
-    const canMoveHere = role === 'runner' && !movementLocked && node.revealed && movableNodeIds.has(node.id);
+    const canMoveHere = role === 'runner' && !movementLocked && node.revealed && movableNodeIds.has(node.id) && (!isBlockingNode(currentNode) || nodeDepthFrom(state.entryNodeId).get(node.id) <= nodeDepthFrom(state.entryNodeId).get(currentNode.id));
     const classes = ['arch-node', canMoveHere ? 'movable' : '', nodeClass(node.type), current ? 'current' : '', entry ? 'entry' : '', terminal ? 'terminal' : '', node.cleared ? 'cleared' : '', node.revealed ? '' : 'concealed'].join(' ');
     const stat = node.type === 'Чёрный ЛЁД' && node.ice
       ? `<span>СКО ${node.ice.speed}</span><span>АТК ${node.ice.attack}</span><span>ЗАЩ ${node.ice.defense}</span><span>REZ ${node.ice.rez}</span>`
