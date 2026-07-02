@@ -1,7 +1,9 @@
 const role = new URLSearchParams(location.search).get('role') === 'gm' ? 'gm' : 'runner';
 let state;
+let planarEngine = null;
 let pendingRoll = null;
 let pendingCheckAction = null;
+let pathfinderSelectedNodeIds = new Set();
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -21,7 +23,7 @@ async function action(type, payload = {}) {
     });
     const result = await response.json();
     if (!result.ok) {
-      const staleServer = ['createNetwork', 'updateNetwork', 'deleteNetwork', 'openNetwork', 'updateNode', 'addWalletFunds'].includes(type)
+      const staleServer = ['createNetwork', 'updateNetwork', 'deleteNetwork', 'openNetwork', 'updateNode', 'addWalletFunds', 'deleteEdge', 'setNodePositions'].includes(type)
         && result.error === 'Неизвестное действие.';
       toast(staleServer ? 'Перезапустите сервер: он всё ещё использует старую версию.' : result.error, true);
     }
@@ -45,11 +47,244 @@ function esc(value) {
 }
 
 function nodeIcon(type) {
-  return ({ 'Файл': '▤', 'Пароль': '◇', 'Управляющий Узел': '⌁', 'Чёрный ЛЁД': '⟁' })[type] || '◆';
+  return ({ 'Файл': '▤', 'Пароль': '◇', 'Управляющий Узел': '⌁', 'Программа': '▱' })[type] || '◆';
 }
 
 function nodeClass(type) {
-  return ({ 'Файл': 'file', 'Пароль': 'password', 'Управляющий Узел': 'control-node', 'Чёрный ЛЁД': 'black-ice' })[type] || 'unknown';
+  return ({ 'Файл': 'file', 'Пароль': 'password', 'Управляющий Узел': 'control-node', 'Программа': 'program-node' })[type] || 'unknown';
+}
+
+function nodeLabel(node) {
+  return node ? `${node.title} [${node.type}]` : '';
+}
+
+function getZoom(canvas) {
+  const c = canvas || $('#architecture')?.querySelector('.graph-canvas');
+  return parseFloat(c?.dataset?.zoom || '1');
+}
+
+function getPanX(canvas) {
+  return parseFloat(canvas?.dataset?.panX || '0');
+}
+
+function getPanY(canvas) {
+  return parseFloat(canvas?.dataset?.panY || '0');
+}
+
+function updateTransform(canvas) {
+  const zoom = getZoom(canvas);
+  const panX = getPanX(canvas);
+  const panY = getPanY(canvas);
+  const zoomEl = canvas.querySelector('.planar-zoom');
+  if (zoomEl) zoomEl.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+}
+
+function setZoom(zoom) {
+  const canvas = $('#architecture')?.querySelector('.graph-canvas');
+  if (!canvas) return;
+  const rounded = Math.round(zoom * 100) / 100;
+  canvas.dataset.zoom = String(Math.max(0.25, Math.min(3, rounded)));
+  updateTransform(canvas);
+  updateZoomDisplay();
+  requestAnimationFrame(drawGraphEdges);
+}
+
+function updateZoomDisplay() {
+  const level = $('#zoomLevel');
+  if (level) level.textContent = `${Math.round(getZoom() * 100)}%`;
+}
+
+function nodeNeighbors(nodeId) {
+  return (state.edges || []).reduce((neighbors, edge) => {
+    if (edge.from === nodeId) neighbors.push(edge.to);
+    if (edge.to === nodeId) neighbors.push(edge.from);
+    return neighbors;
+  }, []);
+}
+
+function orderedNodes() {
+  return [...state.nodes].sort((a, b) => (a.floor || 0) - (b.floor || 0) || a.title.localeCompare(b.title));
+}
+
+function graphLayers() {
+  if (!state.nodes.length) return [];
+  const nodesById = new Map(state.nodes.map(node => [node.id, node]));
+  const entryId = nodesById.has(state.entryNodeId) ? state.entryNodeId : state.nodes[0].id;
+  const depths = new Map([[entryId, 0]]);
+  const queue = [entryId];
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const id = queue[cursor];
+    for (const neighborId of nodeNeighbors(id)) {
+      if (!nodesById.has(neighborId) || depths.has(neighborId)) continue;
+      depths.set(neighborId, depths.get(id) + 1);
+      queue.push(neighborId);
+    }
+  }
+
+  const maxDepth = Math.max(0, ...depths.values());
+  const layers = Array.from({ length: maxDepth + 1 }, () => []);
+  for (const node of state.nodes) {
+    const depth = depths.get(node.id);
+    if (depth !== undefined) layers[depth].push(node);
+  }
+  for (const layer of layers) layer.sort((a, b) => (a.layoutOrder ?? a.floor ?? 0) - (b.layoutOrder ?? b.floor ?? 0));
+  const disconnected = state.nodes.filter(node => !depths.has(node.id));
+  if (disconnected.length) layers.push(disconnected);
+  return layers;
+}
+
+function graphDepthMap() {
+  const depths = new Map();
+  if (!state.nodes.length) return depths;
+  const entryId = state.nodes.some(node => node.id === state.entryNodeId) ? state.entryNodeId : state.nodes[0].id;
+  depths.set(entryId, 0);
+  const queue = [entryId];
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const id = queue[cursor];
+    for (const neighborId of nodeNeighbors(id)) {
+      if (depths.has(neighborId)) continue;
+      depths.set(neighborId, depths.get(id) + 1);
+      queue.push(neighborId);
+    }
+  }
+  return depths;
+}
+
+function orientedEdge(edge, depths = graphDepthMap()) {
+  if (edge.directed === true) return { sourceId: edge.from, targetId: edge.to };
+  const fromNode = state.nodes.find(node => node.id === edge.from);
+  const toNode = state.nodes.find(node => node.id === edge.to);
+  const fromRank = [depths.get(edge.from) ?? Infinity, fromNode?.layoutOrder ?? fromNode?.floor ?? Infinity];
+  const toRank = [depths.get(edge.to) ?? Infinity, toNode?.layoutOrder ?? toNode?.floor ?? Infinity];
+  const fromFirst = fromRank[0] < toRank[0] || (fromRank[0] === toRank[0] && fromRank[1] <= toRank[1]);
+  return fromFirst ? { sourceId: edge.from, targetId: edge.to } : { sourceId: edge.to, targetId: edge.from };
+}
+
+function planarGraphPositions() {
+  if (!planarEngine || !state.nodes.length) return null;
+  if (state.nodes.every(node => Number.isFinite(Number(node.layoutX)) && Number.isFinite(Number(node.layoutY)))) {
+    return new Map(state.nodes.map(node => [node.id, { x: Number(node.layoutX), y: Number(node.layoutY) }]));
+  }
+  const builder = new planarEngine.graph.GraphBuilder();
+  const layoutNodes = [...state.nodes].sort((a, b) => (a.layoutOrder ?? a.floor ?? 0) - (b.layoutOrder ?? b.floor ?? 0));
+  const vertexById = new Map(layoutNodes.map(node => [node.id, builder.addVertex(node.id)]));
+  for (const edge of state.edges || []) builder.addEdge(vertexById.get(edge.from), vertexById.get(edge.to));
+  const graph = builder.build();
+  const planar = planarEngine.planarity.testPlanarity(graph);
+  if (!planar.planar) return null;
+  const mesh = planarEngine.embedding.buildHalfEdgeMesh(graph, planar.embedding);
+  const drawing = planarEngine.layout.planarStraightLine(mesh);
+  const raw = layoutNodes.map(node => ({ id: node.id, ...drawing.positions.get(vertexById.get(node.id)) }));
+  const center = raw.reduce((sum, point) => ({ x: sum.x + point.x / raw.length, y: sum.y + point.y / raw.length }), { x: 0, y: 0 });
+  const entry = raw.find(point => point.id === state.entryNodeId) || raw[0];
+  const angle = -Math.PI / 2 - Math.atan2(entry.y - center.y, entry.x - center.x);
+  const rotated = raw.map(point => ({ id: point.id, x: (point.x - center.x) * Math.cos(angle) - (point.y - center.y) * Math.sin(angle), y: (point.x - center.x) * Math.sin(angle) + (point.y - center.y) * Math.cos(angle) }));
+  const minX = Math.min(...rotated.map(point => point.x));
+  const maxX = Math.max(...rotated.map(point => point.x));
+  const minY = Math.min(...rotated.map(point => point.y));
+  const maxY = Math.max(...rotated.map(point => point.y));
+  return new Map(rotated.map(point => {
+    const node = state.nodes.find(item => item.id === point.id);
+    const generated = { x: 10 + 80 * (point.x - minX) / Math.max(1, maxX - minX), y: 7 + 86 * (point.y - minY) / Math.max(1, maxY - minY) };
+    return [point.id, Number.isFinite(Number(node?.layoutX)) && Number.isFinite(Number(node?.layoutY))
+      ? { x: Number(node.layoutX), y: Number(node.layoutY) }
+      : generated];
+  }));
+}
+
+function drawGraphEdges() {
+  const architecture = $('#architecture');
+  const svg = architecture?.querySelector('.graph-links');
+  const canvas = architecture?.querySelector('.graph-canvas');
+  if (!svg || !canvas) return;
+  const zoom = getZoom(canvas);
+  const panX = getPanX(canvas);
+  const panY = getPanY(canvas);
+  const bounds = canvas.getBoundingClientRect();
+  svg.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`);
+  const depths = graphDepthMap();
+  svg.innerHTML = (state.edges || []).map(edge => {
+    const { sourceId, targetId } = orientedEdge(edge, depths);
+    const from = canvas.querySelector(`[data-node-id="${CSS.escape(sourceId)}"]`);
+    const to = canvas.querySelector(`[data-node-id="${CSS.escape(targetId)}"]`);
+    if (!from || !to) return '';
+    const a = from.getBoundingClientRect();
+    const b = to.getBoundingClientRect();
+    const x1 = (a.left + a.width / 2 - bounds.left - panX - bounds.width / 2) / zoom + bounds.width / 2;
+    const y1 = (a.bottom - bounds.top - panY) / zoom;
+    const x2 = (b.left + b.width / 2 - bounds.left - panX - bounds.width / 2) / zoom + bounds.width / 2;
+    const y2 = (b.top - bounds.top - panY) / zoom;
+    return `<g><path data-source="${sourceId}" data-target="${targetId}" d="M ${x1} ${y1} L ${x2} ${y2}" fill="none" stroke="transparent" stroke-width="24" /><path d="M ${x1} ${y1} L ${x2} ${y2}" style="pointer-events:none" /></g>`;
+  }).join('');
+}
+
+function renderedEdgeCrossings() {
+  const canvas = $('#architecture')?.querySelector('.graph-canvas');
+  if (!canvas) return 0;
+  const zoom = getZoom(canvas);
+  const panX = getPanX(canvas);
+  const panY = getPanY(canvas);
+  const bounds = canvas.getBoundingClientRect();
+  const boxes = new Map(state.nodes.map(node => {
+    const element = canvas.querySelector(`[data-node-id="${CSS.escape(node.id)}"]`);
+    if (!element) return [node.id, null];
+    const rect = element.getBoundingClientRect();
+    const top = { x: (rect.left + rect.width / 2 - bounds.left - panX - bounds.width / 2) / zoom + bounds.width / 2, y: (rect.top - bounds.top - panY) / zoom };
+    const bottom = { x: (rect.left + rect.width / 2 - bounds.left - panX - bounds.width / 2) / zoom + bounds.width / 2, y: (rect.bottom - bounds.top - panY) / zoom };
+    return [node.id, { top, bottom }];
+  }));
+  const orientation = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  let crossings = 0;
+  const depths = graphDepthMap();
+  for (let i = 0; i < state.edges.length; i += 1) {
+    for (let j = i + 1; j < state.edges.length; j += 1) {
+      const first = state.edges[i];
+      const second = state.edges[j];
+      if ([first.from, first.to].some(id => id === second.from || id === second.to)) continue;
+      const firstDirection = orientedEdge(first, depths);
+      const secondDirection = orientedEdge(second, depths);
+      const a = boxes.get(firstDirection.sourceId)?.bottom; const b = boxes.get(firstDirection.targetId)?.top;
+      const c = boxes.get(secondDirection.sourceId)?.bottom; const d = boxes.get(secondDirection.targetId)?.top;
+      if (a && b && c && d && orientation(a, b, c) * orientation(a, b, d) < 0 && orientation(c, d, a) * orientation(c, d, b) < 0) crossings += 1;
+    }
+  }
+  return crossings;
+}
+
+function openNodeDetails(nodeId) {
+  const node = state.nodes.find(item => item.id === nodeId);
+  if (!node) return;
+  const neighbors = nodeNeighbors(node.id).map(id => state.nodes.find(item => item.id === id)).filter(Boolean);
+  const entry = node.id === state.entryNodeId;
+  const terminal = (state.terminalNodeIds || []).includes(node.id);
+  const current = node.id === state.runner.floorId;
+  const status = [entry ? 'ВХОД' : '', terminal ? 'ТЕРМИНАЛ' : '', node.revealed ? 'ОТКРЫТ' : 'СКРЫТ', node.cleared ? 'ПРЕОДОЛЕН' : 'АКТИВЕН', current ? 'НЕТРАННЕР ЗДЕСЬ' : ''].filter(Boolean);
+  const stats = node.type === 'Чёрный ЛЁД' && node.ice
+    ? [['ВОСПРИЯТИЕ', node.ice.perception], ['СКОРОСТЬ', node.ice.speed], ['АТАКА', node.ice.attack], ['ЗАЩИТА', node.ice.defense], ['REZ', `${node.currentRez ?? node.ice.rez} / ${node.ice.rez}`]]
+    : [['СЛ', Number(node.dv || 0)]];
+  $('#nodeInfoType').textContent = node.type;
+  $('#nodeInfoTitle').textContent = node.title;
+  $('#nodeInfoStatus').innerHTML = status.map(item => `<span>${esc(item)}</span>`).join('');
+  $('#nodeInfoStats').innerHTML = stats.map(([label, value]) => `<div><small>${esc(label)}</small><b>${esc(value)}</b></div>`).join('');
+  $('#nodeInfoDetails').textContent = node.details || 'Описание отсутствует.';
+  $('#nodeInfoEffect').textContent = node.ice?.effect || '';
+  $('#nodeInfoEffectWrap').classList.toggle('hidden', !node.ice?.effect);
+  $('#nodeInfoLinks').innerHTML = neighbors.length ? neighbors.map(item => `<span>${esc(item.title)}<small>${esc(item.type)}</small></span>`).join('') : '<span>Нет связей</span>';
+  const moveButton = $('#nodeInfoMove');
+  const movementLocked = Boolean(state.battle?.active && state.battle.nodeId === state.runner.floorId);
+  const canMoveHere = node.revealed && nodeNeighbors(state.runner.floorId).includes(node.id);
+  moveButton.classList.toggle('hidden', role !== 'runner' || current || movementLocked || !canMoveHere);
+  moveButton.dataset.nodeId = node.id;
+  $('#nodeInfoDialog').showModal();
+}
+
+function fillNodeLinkOptions(select, selectedIds = [], excludeId = null) {
+  if (!select) return;
+  const selected = new Set(selectedIds);
+  select.innerHTML = orderedNodes()
+    .filter(node => node.id !== excludeId)
+    .map(node => `<option value="${esc(node.id)}"${selected.has(node.id) ? ' selected' : ''}>${esc(nodeLabel(node))}</option>`)
+    .join('');
 }
 
 function render() {
@@ -76,11 +311,10 @@ function render() {
   $('#actionPips').innerHTML = Array.from({ length: total }, (_, index) => `<i class="${index < state.runner.netActionsRemaining ? 'live' : ''}"></i>`).join('');
   $('#gmPanel').classList.toggle('hidden', role !== 'gm');
   $('#architectureIntel').textContent = state.totalFloors
-    ? `ВСЕГО ЭТАЖЕЙ: ${state.totalFloors}`
-    : 'КОЛИЧЕСТВО ЭТАЖЕЙ НЕИЗВЕСТНО';
-  const pathfinder = state.runner.pathfinder;
-  $('#pathfinderIntel').textContent = pathfinder
-    ? `ПЕРВОПРОХОДЕЦ ${pathfinder.result} → ЛИМИТ ${pathfinder.floorBudget}, ОТКРЫТО ${pathfinder.openedByResult}, НОВЫХ ${pathfinder.newlyRevealed}${pathfinder.stoppedBy ? ` · СТОП: ${pathfinder.stoppedBy} СЛ ${pathfinder.stoppedDv}` : ''}`
+    ? `УЗЛОВ: ${state.totalFloors} · ТЕРМИНАЛОВ: ${(state.terminalNodeIds || []).length}`
+    : 'КОЛИЧЕСТВО УЗЛОВ НЕИЗВЕСТНО';
+  $('#pathfinderIntel').textContent = state.runner.pathfinder
+    ? `ПЕРВОПРОХОДЕЦ: ${state.runner.pathfinder.result}`
     : '';
   $$('[data-action-label]').forEach(button => {
     button.textContent = russianActionLabels[button.dataset.actionLabel] || button.textContent;
@@ -88,7 +322,7 @@ function render() {
   $$('[data-meat-label]').forEach(button => {
     button.textContent = russianActionLabels[button.dataset.meatLabel] || button.textContent;
   });
-  $('#nextTurnBtn').disabled = role === 'gm';
+  $('#nextTurnBtn').disabled = role === 'gm' || Boolean(state.battle?.active && state.battle.currentTurn && state.battle.currentTurn !== 'runner');
   $('#newNetworkBtn').classList.toggle('hidden', role !== 'gm');
   $('#scanRequestBtn').classList.toggle('hidden', role !== 'runner');
   $('#scanRequestBtn').disabled = role !== 'runner' || state.session.connected || state.scan?.pending;
@@ -103,7 +337,26 @@ function render() {
   renderBattle();
   renderPrograms();
   renderLog();
-  if (role === 'gm') fillGmForm();
+  if (role === 'gm') {
+    fillGmForm();
+    fillNodeLinkOptions($('#nodeForm').elements.edgeIds, [state.entryNodeId].filter(Boolean));
+    const pfResolve = $('#pathfinderResolve');
+    const pfPending = state.session?.pathfinderPending;
+    if (pfPending) {
+      pfResolve.classList.remove('hidden');
+      $('#pfResult').textContent = pfPending.result;
+      const unrevealed = state.nodes.filter(node => !node.revealed);
+      const validIds = new Set(unrevealed.map(node => node.id));
+      pathfinderSelectedNodeIds = new Set([...pathfinderSelectedNodeIds].filter(id => validIds.has(id)));
+      $('#pfNodeChoices').innerHTML = unrevealed.length
+        ? `<p class="form-hint">Выберите узлы кликом на основной схеме. Выбрано: <b id="pfSelectionCount">${pathfinderSelectedNodeIds.size}</b></p>`
+        : '<p class="form-hint">Нет скрытых узлов для открытия.</p>';
+      $('#pfResolveBtn').disabled = pathfinderSelectedNodeIds.size === 0;
+    } else {
+      pfResolve.classList.add('hidden');
+      pathfinderSelectedNodeIds.clear();
+    }
+  }
 }
 
 function renderNetworks() {
@@ -113,7 +366,7 @@ function renderNetworks() {
       ? `<button data-edit-network="${network.id}">ИЗМЕНИТЬ</button><button class="delete-network" data-delete-network="${network.id}"${state.networks.length <= 1 ? ' disabled' : ''}>×</button>`
       : '';
     return `<article class="network-card ${active ? 'active' : ''}">
-      <div class="network-card-copy"><small>${active ? 'АКТИВНАЯ СЕТЬ' : 'ДОСТУПНАЯ СЕТЬ'} · ${network.floorCount ? `${network.floorCount} ЭТ.` : 'АРХИТЕКТУРА НЕИЗВЕСТНА'}</small><b>${esc(network.name)}</b></div>
+      <div class="network-card-copy"><small>${active ? 'АКТИВНАЯ СЕТЬ' : 'ДОСТУПНАЯ СЕТЬ'} · ${network.nodeCount || network.floorCount ? `${network.nodeCount || network.floorCount} УЗЛ.` : 'АРХИТЕКТУРА НЕИЗВЕСТНА'}</small><b>${esc(network.name)}</b></div>
       <div class="network-card-actions"><button data-open-network="${network.id}"${active ? ' disabled' : ''}>${active ? 'ОТКРЫТА' : 'ОТКРЫТЬ'}</button>${gmActions}</div>
     </article>`;
   }).join('') : '<p class="network-empty">Доступные Сети пока не обнаружены. Запросите сканирование.</p>';
@@ -128,45 +381,326 @@ function renderNetworks() {
   });
   $$('[data-delete-network]').forEach(button => button.onclick = () => {
     const network = state.networks.find(item => item.id === button.dataset.deleteNetwork);
-    if (confirm(`Удалить сеть «${network.name}» со всеми этажами?`)) action('deleteNetwork', { id: network.id });
+    if (confirm(`Удалить сеть «${network.name}» со всеми узлами?`)) action('deleteNetwork', { id: network.id });
   });
   const scanForm = $('#gmScanForm');
   scanForm.classList.toggle('hidden', role !== 'gm' || !state.scan?.pending);
   if (role === 'gm' && state.scan?.pending) {
     const visible = new Set(state.scan.visibleNetworkIds || []);
-    $('#scanNetworkChoices').innerHTML = state.networks.map(network => `<label><input type="checkbox" name="networkIds" value="${esc(network.id)}"${visible.has(network.id) ? ' checked' : ''}><span><b>${esc(network.name)}</b><small>${network.floorCount} ЭТ. · ${esc(network.accessPoint || 'ТОЧКА ДОСТУПА НЕ УКАЗАНА')}</small></span></label>`).join('');
+    $('#scanNetworkChoices').innerHTML = state.networks.map(network => `<label><input type="checkbox" name="networkIds" value="${esc(network.id)}"${visible.has(network.id) ? ' checked' : ''}><span><b>${esc(network.name)}</b><small>${network.nodeCount || network.floorCount} УЗЛ. · ${esc(network.accessPoint || 'ТОЧКА ДОСТУПА НЕ УКАЗАНА')}</small></span></label>`).join('');
   }
 }
 
 function renderArchitecture() {
-  const sorted = [...state.nodes].sort((a, b) => a.floor - b.floor);
+  const layers = graphLayers();
+  const planarPositions = planarGraphPositions();
+  const depthById = new Map(layers.flatMap((layer, depth) => layer.map(node => [node.id, depth])));
   const currentNode = state.nodes.find(node => node.id === state.runner.floorId);
   const movementLocked = Boolean(state.battle?.active && state.battle.nodeId === currentNode?.id);
-  $('#architecture').innerHTML = sorted.length ? sorted.map((node, index) => {
+  const movableNodeIds = new Set(nodeNeighbors(state.runner.floorId));
+  const renderNode = (node, depth, index) => {
     const current = node.id === state.runner.floorId;
-    const classes = ['arch-node', role === 'runner' && !movementLocked ? 'movable' : '', nodeClass(node.type), current ? 'current' : '', node.cleared ? 'cleared' : '', node.revealed ? '' : 'concealed'].join(' ');
+    const entry = node.id === state.entryNodeId;
+    const terminal = (state.terminalNodeIds || []).includes(node.id);
+    const pathfinderSelectable = role === 'gm' && Boolean(state.session?.pathfinderPending) && !node.revealed;
+    const pathfinderSelected = pathfinderSelectable && pathfinderSelectedNodeIds.has(node.id);
+    const canMoveHere = role === 'runner' && !movementLocked && node.revealed && movableNodeIds.has(node.id);
+    const classes = ['arch-node', canMoveHere ? 'movable' : '', nodeClass(node.type), current ? 'current' : '', entry ? 'entry' : '', terminal ? 'terminal' : '', node.cleared ? 'cleared' : '', node.revealed ? '' : 'concealed', pathfinderSelectable ? 'pathfinder-selectable' : '', pathfinderSelected ? 'pathfinder-selected' : ''].join(' ');
     const stat = node.type === 'Чёрный ЛЁД' && node.ice
       ? `<span>СКО ${node.ice.speed}</span><span>АТК ${node.ice.attack}</span><span>ЗАЩ ${node.ice.defense}</span><span>REZ ${node.ice.rez}</span>`
       : node.dv ? `<span>СЛ ${node.dv}</span>` : '';
     const dvEditor = role === 'gm' && node.type !== 'Чёрный ЛЁД'
       ? `<label class="dv-editor">${node.type === 'Пароль' ? 'СЛ ПАРОЛЯ' : 'СЛ ПРОВЕРКИ'} <input data-node-dv="${node.id}" aria-label="Сложность проверки ${esc(node.title)}" type="number" min="0" max="30" step="1" value="${Number(node.dv || 0)}" required></label>`
       : '';
-    const gmTools = role === 'gm' ? `<div class="node-tools">${dvEditor}<button data-edit-node="${node.id}">ИЗМЕНИТЬ</button><button data-reveal="${node.id}">${node.revealed ? 'СКРЫТЬ' : 'ОТКРЫТЬ'}</button><button data-clear="${node.id}">${node.cleared ? 'ВОССТАНОВИТЬ' : 'ПРЕОДОЛЕНО'}</button><button data-delete="${node.id}">×</button></div>` : '';
-    return `${index ? '<div class="trace-line"><i></i></div>' : ''}<article class="${classes}"${role === 'runner' && !movementLocked ? ` data-move="${node.id}"` : ''}>
-      <div class="floor-no">Э${String(node.floor).padStart(2, '0')}</div>
+    const linked = nodeNeighbors(node.id)
+      .map(id => state.nodes.find(item => item.id === id))
+      .filter(Boolean)
+      .map(item => `<span>${esc(item.title)}</span>`)
+      .join('') || '<span>НЕТ СВЯЗЕЙ</span>';
+    const badges = `${entry ? '<b>ВХОД</b>' : ''}${terminal ? '<b>ТЕРМИНАЛ</b>' : ''}`;
+    const gmTools = role === 'gm' ? `<div class="node-tools">${dvEditor}<button data-entry="${node.id}"${entry ? ' disabled' : ''}>ВХОД</button><button data-edit-node="${node.id}">ИЗМЕНИТЬ</button><button data-reveal="${node.id}"${entry ? ' disabled' : ''}>${node.revealed ? 'СКРЫТЬ' : 'ОТКРЫТЬ'}</button><button data-clear="${node.id}">${node.cleared ? 'ВОССТАНОВИТЬ' : 'ПРЕОДОЛЕНО'}</button><button data-delete="${node.id}"${entry ? ' disabled' : ''}>×</button></div>` : '';
+    const position = planarPositions?.get(node.id);
+    const connectionPorts = role === 'gm' ? `<button type="button" class="node-port input-port" data-connect-to="${node.id}" aria-label="Вход соединения в ${esc(node.title)}" title="Вход соединения"></button><button type="button" class="node-port output-port" data-connect-from="${node.id}" aria-label="Начать соединение из ${esc(node.title)}" title="Перетащите к верхнему порту другого узла"></button>` : '';
+    return `<article class="${classes}" data-node-id="${node.id}"${position ? ` style="--node-x:${position.x}%;--node-y:${position.y}%"` : ''}${role === 'gm' ? ' data-positionable="true"' : ''}${pathfinderSelectable ? ` data-pathfinder-node="${node.id}" title="Выбрать узел для Первопроходца"` : role === 'gm' ? ' title="Перетащите в любую позицию без пересечения рёбер"' : ''}${canMoveHere ? ` data-move="${node.id}"` : ''}>
+      <div class="floor-no">С${String(depth).padStart(2, '0')}.${String(index + 1).padStart(2, '0')}</div>
       <div class="node-glyph">${nodeIcon(node.type)}</div>
-      <div class="node-copy"><small>${esc(node.type)}</small><h3>${esc(node.title)}</h3><p>${esc(node.details || '')}</p><div class="node-stats">${stat}</div></div>
-      ${current ? `<b class="runner-marker">${movementLocked ? 'БОЙ // ДВИЖЕНИЕ ЗАБЛОКИРОВАНО' : 'НЕТРАННЕР ЗДЕСЬ'}</b>` : ''}${gmTools}
+      <div class="node-copy"><small>${esc(node.type)} ${badges}</small><h3>${esc(node.title)}</h3><p>${esc(node.details || '')}</p><div class="node-links">${linked}</div><div class="node-stats">${stat}</div></div>
+      ${current ? `<b class="runner-marker">${movementLocked ? 'БОЙ // ДВИЖЕНИЕ ЗАБЛОКИРОВАНО' : 'НЕТРАННЕР ЗДЕСЬ'}</b>` : ''}${gmTools}${connectionPorts}
     </article>`;
-  }).join('') : `<p class="architecture-empty">${state.activeNetworkId ? 'ПОДКЛЮЧИТЕСЬ К СЕТИ, ЧТОБЫ ОТКРЫТЬ ПЕРВЫЙ ЭТАЖ' : 'ВЫБЕРИТЕ ОБНАРУЖЕННУЮ СЕТЬ'}</p>`;
+  };
+  const hasGraph = layers.length && planarPositions;
+  $('#architecture').innerHTML = hasGraph
+    ? `<div class="graph-canvas planar-canvas" data-zoom="1" data-pan-x="0" data-pan-y="0"><div class="planar-zoom"><svg class="graph-links" aria-hidden="true"></svg>${orderedNodes().map((node, index) => renderNode(node, depthById.get(node.id) || 0, index)).join('')}</div></div>`
+    : `<p class="architecture-empty">${state.activeNetworkId ? 'ПОДКЛЮЧИТЕСЬ К СЕТИ, ЧТОБЫ ОТКРЫТЬ ВХОДНОЙ УЗЕЛ' : 'ВЫБЕРИТЕ ОБНАРУЖЕННУЮ СЕТЬ'}</p>`;
 
-  $$('[data-move]').forEach(node => node.addEventListener('click', event => {
+  requestAnimationFrame(drawGraphEdges);
+  setTimeout(drawGraphEdges, 0);
+
+  if (hasGraph) {
+    let meta = $('.architecture-meta');
+    if (meta && !$('#zoomControls')) {
+      meta.insertAdjacentHTML('beforeend', `<div id="zoomControls" class="zoom-controls"><button data-zoom-out title="Отдалить">−</button><span class="zoom-level" id="zoomLevel">100%</span><button data-zoom-in title="Приблизить">+</button><button data-zoom-reset title="Сбросить масштаб">⟲</button></div>`);
+    }
+
+    const zoomControls = $('#zoomControls');
+    if (zoomControls) {
+      zoomControls.querySelector('[data-zoom-in]').onclick = () => setZoom(Math.min(3, getZoom() + 0.2));
+      zoomControls.querySelector('[data-zoom-out]').onclick = () => setZoom(Math.max(0.25, getZoom() - 0.2));
+      zoomControls.querySelector('[data-zoom-reset]').onclick = () => setZoom(1);
+      updateZoomDisplay();
+    }
+
+    const canvas = $('#architecture').querySelector('.graph-canvas');
+    if (canvas) {
+      updateTransform(canvas);
+      if (!canvas.dataset.zoomWheel) {
+        canvas.dataset.zoomWheel = '1';
+        canvas.addEventListener('wheel', event => {
+          if (!event.ctrlKey && !event.metaKey) return;
+          event.preventDefault();
+          const delta = event.deltaY > 0 ? -0.1 : 0.1;
+          setZoom(getZoom(canvas) + delta);
+        }, { passive: false });
+      }
+      if (!canvas.dataset.panInit) {
+        canvas.dataset.panInit = '1';
+        canvas.addEventListener('pointerdown', panEvent => {
+          if (panEvent.button !== 0) return;
+          if (panEvent.target.closest('.arch-node, .node-port, button, input, label, select, a, textarea, path')) return;
+          panEvent.preventDefault();
+          canvas.classList.add('panning');
+          const startX = panEvent.clientX;
+          const startY = panEvent.clientY;
+          const panStartX = getPanX(canvas);
+          const panStartY = getPanY(canvas);
+          const doPan = moveEvent => {
+            moveEvent.preventDefault();
+            canvas.dataset.panX = String(panStartX + moveEvent.clientX - startX);
+            canvas.dataset.panY = String(panStartY + moveEvent.clientY - startY);
+            updateTransform(canvas);
+            drawGraphEdges();
+          };
+          const stopPan = () => {
+            canvas.classList.remove('panning');
+            document.removeEventListener('pointermove', doPan);
+            document.removeEventListener('pointerup', stopPan);
+          };
+          document.addEventListener('pointermove', doPan);
+          document.addEventListener('pointerup', stopPan);
+        });
+      }
+    }
+  }
+
+  if (role === 'gm') {
+    const edgeSvg = $('.graph-links');
+    if (edgeSvg) {
+      edgeSvg.addEventListener('click', event => {
+        const path = event.target.closest('path');
+        if (!path || !path.dataset.source || path.classList.contains('pending-edge')) return;
+        event.stopPropagation();
+        const from = path.dataset.source;
+        const to = path.dataset.target;
+        if (confirm('Удалить эту связь?')) {
+          action('deleteEdge', { from, to });
+        }
+      });
+    }
+    $$('[data-connect-from]').forEach(handle => handle.addEventListener('pointerdown', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const canvas = handle.closest('.graph-canvas');
+      const svg = canvas.querySelector('.graph-links');
+      const bounds = canvas.getBoundingClientRect();
+      const zoom = getZoom(canvas);
+      const panX = getPanX(canvas);
+      const panY = getPanY(canvas);
+      const sourceCard = handle.closest('.arch-node');
+      const sourceRect = sourceCard.getBoundingClientRect();
+      const start = { x: (sourceRect.left + sourceRect.width / 2 - bounds.left - panX - bounds.width / 2) / zoom + bounds.width / 2, y: (sourceRect.bottom - bounds.top - panY) / zoom };
+      const preview = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      preview.classList.add('pending-edge');
+      svg.appendChild(preview);
+      handle.setPointerCapture(event.pointerId);
+      const move = moveEvent => {
+        const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest('[data-connect-to]');
+        $$('[data-connect-to].connection-target').forEach(item => item.classList.remove('connection-target'));
+        if (target && target.dataset.connectTo !== handle.dataset.connectFrom) target.classList.add('connection-target');
+        const targetCard = target?.closest('.arch-node');
+        const targetRect = targetCard?.getBoundingClientRect();
+        const end = targetRect && target.dataset.connectTo !== handle.dataset.connectFrom
+          ? { x: (targetRect.left + targetRect.width / 2 - bounds.left - panX - bounds.width / 2) / zoom + bounds.width / 2, y: (targetRect.top - bounds.top - panY) / zoom }
+          : { x: (moveEvent.clientX - bounds.left - panX - bounds.width / 2) / zoom + bounds.width / 2, y: (moveEvent.clientY - bounds.top - panY) / zoom };
+        preview.setAttribute('d', `M ${start.x} ${start.y} L ${end.x} ${end.y}`);
+      };
+      const finish = async finishEvent => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', finish);
+        handle.removeEventListener('pointercancel', cancel);
+        const target = document.elementFromPoint(finishEvent.clientX, finishEvent.clientY)?.closest('[data-connect-to]');
+        preview.remove();
+        $$('[data-connect-to].connection-target').forEach(item => item.classList.remove('connection-target'));
+        if (!target || target.dataset.connectTo === handle.dataset.connectFrom) return;
+        const targetId = target.dataset.connectTo;
+        const targetRect = target.closest('.arch-node').getBoundingClientRect();
+        const end = { x: (targetRect.left + targetRect.width / 2 - bounds.left - panX - bounds.width / 2) / zoom + bounds.width / 2, y: (targetRect.top - bounds.top - panY) / zoom };
+        const orientation = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        const crosses = [...svg.querySelectorAll('path[data-source]:not(.pending-edge)')].some(path => {
+          if ([path.dataset.source, path.dataset.target].some(id => id === handle.dataset.connectFrom || id === targetId)) return false;
+          const numbers = (path.getAttribute('d').match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
+          const a = { x: numbers[0], y: numbers[1] }; const b = { x: numbers[2], y: numbers[3] };
+          return orientation(start, end, a) * orientation(start, end, b) < 0 && orientation(a, b, start) * orientation(a, b, end) < 0;
+        });
+        if (crosses) {
+          toast('Связь отклонена: рёбра не могут пересекаться.', true);
+          return;
+        }
+        await action('connectNodes', { from: handle.dataset.connectFrom, to: targetId });
+      };
+      const cancel = () => {
+        preview.remove();
+        $$('[data-connect-to].connection-target').forEach(item => item.classList.remove('connection-target'));
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', finish);
+      handle.addEventListener('pointercancel', cancel);
+    }));
+  }
+
+  if (role === 'gm') {
+    $$('.arch-node[data-positionable="true"]').forEach(card => {
+      card.addEventListener('pointerdown', event => {
+        if (event.target.closest('button,input,label')) return;
+        event.preventDefault();
+        const canvas = card.closest('.graph-canvas');
+        const startX = card.style.getPropertyValue('--node-x');
+        const startY = card.style.getPropertyValue('--node-y');
+        const pointerStart = { x: event.clientX, y: event.clientY };
+        card.setPointerCapture(event.pointerId);
+        card.classList.add('positioning');
+        const move = moveEvent => {
+          if (Math.hypot(moveEvent.clientX - pointerStart.x, moveEvent.clientY - pointerStart.y) > 4) card.dataset.dragged = 'true';
+          const bounds = canvas.getBoundingClientRect();
+          const zoom = getZoom(canvas);
+          const panX = getPanX(canvas);
+          const panY = getPanY(canvas);
+          const cx = bounds.width / 2;
+          const x = Math.max(10, Math.min(90, 100 * ((moveEvent.clientX - bounds.left - panX - cx) / (zoom * bounds.width) + 0.5)));
+          const y = Math.max(7, Math.min(93, 100 * ((moveEvent.clientY - bounds.top - panY) / (zoom * bounds.height))));
+          card.style.setProperty('--node-x', `${x}%`);
+          card.style.setProperty('--node-y', `${y}%`);
+          drawGraphEdges();
+          card.classList.toggle('invalid-position', renderedEdgeCrossings() > 0);
+        };
+        const finish = async () => {
+          card.removeEventListener('pointermove', move);
+          card.removeEventListener('pointerup', finish);
+          card.removeEventListener('pointercancel', cancel);
+          card.classList.remove('positioning');
+          if (renderedEdgeCrossings() > 0) {
+            card.style.setProperty('--node-x', startX);
+            card.style.setProperty('--node-y', startY);
+            card.classList.remove('invalid-position');
+            drawGraphEdges();
+            toast('Позиция отклонена: рёбра не могут пересекаться.', true);
+            return;
+          }
+          const positions = $$('.arch-node[data-node-id]').map(node => ({
+            id: node.dataset.nodeId,
+            x: parseFloat(node.style.getPropertyValue('--node-x')),
+            y: parseFloat(node.style.getPropertyValue('--node-y'))
+          }));
+          await action('setNodePositions', { positions });
+        };
+        const cancel = () => {
+          card.style.setProperty('--node-x', startX);
+          card.style.setProperty('--node-y', startY);
+          card.classList.remove('positioning', 'invalid-position');
+          drawGraphEdges();
+        };
+        card.addEventListener('pointermove', move);
+        card.addEventListener('pointerup', finish);
+        card.addEventListener('pointercancel', cancel);
+      });
+    });
+  }
+
+  if (role === 'gm') {
+    let draggedId = null;
+    let suppressClick = false;
+    $$('.arch-node[draggable="true"]').forEach(card => {
+      card.addEventListener('dragstart', event => {
+        if (event.target.closest('button,input,label')) {
+          event.preventDefault();
+          return;
+        }
+        draggedId = card.dataset.nodeId;
+        suppressClick = true;
+        card.classList.add('dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', draggedId);
+      });
+      card.addEventListener('dragend', () => {
+        draggedId = null;
+        $$('.arch-node').forEach(node => node.classList.remove('dragging', 'drop-target'));
+        setTimeout(() => { suppressClick = false; }, 0);
+      });
+      card.addEventListener('click', event => {
+        if (!suppressClick) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+      card.addEventListener('dragover', event => {
+        const source = draggedId && $(`[data-node-id="${CSS.escape(draggedId)}"]`);
+        if (!source || source === card || source.parentElement !== card.parentElement) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        $$('.arch-node.drop-target').forEach(node => node.classList.remove('drop-target'));
+        card.classList.add('drop-target');
+      });
+      card.addEventListener('dragleave', () => card.classList.remove('drop-target'));
+      card.addEventListener('drop', event => {
+        event.preventDefault();
+        const sourceId = draggedId || event.dataTransfer.getData('text/plain');
+        const layerIds = [...card.parentElement.querySelectorAll('.arch-node')].map(node => node.dataset.nodeId);
+        const from = layerIds.indexOf(sourceId);
+        const to = layerIds.indexOf(card.dataset.nodeId);
+        if (from < 0 || to < 0 || from === to) return;
+        layerIds.splice(to, 0, layerIds.splice(from, 1)[0]);
+        const layerSet = new Set(layerIds);
+        const nodeIds = card.parentElement.classList.contains('planar-canvas')
+          ? layerIds
+          : graphLayers().flatMap(layer => {
+            const ids = layer.map(node => node.id);
+            return ids.some(id => layerSet.has(id)) ? layerIds : ids;
+          });
+        action('setNodeOrder', { nodeIds });
+      });
+    });
+  }
+
+  $$('.arch-node[data-node-id]').forEach(node => node.addEventListener('click', event => {
     if (event.target.closest('button,input,label')) return;
-    action('move', { id: node.dataset.move });
+    if (node.dataset.dragged === 'true') {
+      delete node.dataset.dragged;
+      return;
+    }
+    if (node.dataset.pathfinderNode) {
+      const nodeId = node.dataset.pathfinderNode;
+      if (pathfinderSelectedNodeIds.has(nodeId)) pathfinderSelectedNodeIds.delete(nodeId);
+      else pathfinderSelectedNodeIds.add(nodeId);
+      node.classList.toggle('pathfinder-selected', pathfinderSelectedNodeIds.has(nodeId));
+      const count = $('#pfSelectionCount');
+      if (count) count.textContent = pathfinderSelectedNodeIds.size;
+      $('#pfResolveBtn').disabled = pathfinderSelectedNodeIds.size === 0;
+      return;
+    }
+    openNodeDetails(node.dataset.nodeId);
   }));
   $$('[data-reveal]').forEach(button => button.onclick = () => action('toggleReveal', { id: button.dataset.reveal }));
   $$('[data-clear]').forEach(button => button.onclick = () => action('toggleClear', { id: button.dataset.clear }));
   $$('[data-delete]').forEach(button => button.onclick = () => action('deleteNode', { id: button.dataset.delete }));
+  $$('[data-entry]').forEach(button => button.onclick = () => action('setEntryNode', { id: button.dataset.entry }));
   $$('[data-edit-node]').forEach(button => button.onclick = () => {
     const node = state.nodes.find(item => item.id === button.dataset.editNode);
     const form = $('#nodeEditForm');
@@ -174,8 +708,8 @@ function renderArchitecture() {
     form.elements.title.value = node.title;
     form.elements.nodeType.value = node.type;
     form.elements.dv.value = Number(node.dv || 0);
-    form.elements.iceName.value = node.ice?.name || 'Аспид';
     form.elements.details.value = node.details || '';
+    fillNodeLinkOptions(form.elements.edgeIds, nodeNeighbors(node.id), node.id);
     $('#nodeDialog').showModal();
   });
   const saveNodeDv = async input => {
@@ -207,26 +741,41 @@ function renderBattle() {
   $('#battleIceStats').textContent = `ВСП ${node.ice.perception} · СКО ${node.ice.speed} · АТК ${node.ice.attack} · ЗАЩ ${node.ice.defense}`;
   $('#battleInitiativeRunner').textContent = `ВСТРЕЧА ${battle.runnerInitiative}`;
   $('#battleInitiativeIce').textContent = `ВСТРЕЧА ${battle.iceInitiative}${battle.ambushHit ? ' · ЗАСАДА' : ''}`;
+  const friendlyIce = state.programs.filter(program => program.class === 'Чёрный ЛЁД' && program.active && !program.destroyed && program.targetNodeId === battle.nodeId);
+  const baseQueue = battle.runnerInitiative >= battle.iceInitiative
+    ? [{ id: 'runner', name: state.runner.name, detail: `НЕТРАННЕР · ${battle.runnerInitiative}` }, { id: 'ice', name: node.title, detail: `ВРАЖЕСКИЙ ЛЁД · ${battle.iceInitiative}` }]
+    : [{ id: 'ice', name: node.title, detail: `ВРАЖЕСКИЙ ЛЁД · ${battle.iceInitiative}` }, { id: 'runner', name: state.runner.name, detail: `НЕТРАННЕР · ${battle.runnerInitiative}` }];
+  const queue = [...friendlyIce.map(program => ({ id: `runnerIce:${program.id}`, name: program.name, detail: 'ВАШ ЛЁД · ВЕРШИНА ОЧЕРЕДИ' })), ...baseQueue];
+  const currentTurn = queue.some(item => item.id === battle.currentTurn) ? battle.currentTurn : queue[0]?.id;
+  const activeActor = queue.find(item => item.id === currentTurn);
+  const activeIndex = Math.max(0, queue.findIndex(item => item.id === currentTurn));
+  const visibleQueue = [...queue.slice(activeIndex), ...queue.slice(0, activeIndex)];
+  $('#activeTurnLabel').textContent = `ХОД: ${activeActor?.name || '—'}`;
+  $('#initiativeQueue').innerHTML = visibleQueue.map((item, index) => `<div class="initiative-entry ${item.id === currentTurn ? 'active' : ''}"><span>${index === 0 ? '▶' : `+${index}`}</span><div><b>${esc(item.name)}</b><small>${esc(item.detail)}</small></div>${item.id === currentTurn ? '<em>СЕЙЧАС</em>' : ''}</div>`).join('');
   $('#iceRezText').textContent = `${node.currentRez} / ${node.ice.rez}`;
   $('#iceRezMeter').style.width = `${100 * node.currentRez / node.ice.rez}%`;
   $('#battleEffect').textContent = node.ice.effect;
   const attackProgram = state.programs.find(program => program.class === 'Атакующая' && program.target !== 'Нетраннеры' && program.active && !program.destroyed);
   $$('[data-battle-action]').forEach(button => {
     const kind = button.dataset.battleAction;
-    if (kind === 'iceAttack') button.disabled = role !== 'gm';
+    if (kind === 'iceAttack') button.disabled = role !== 'gm' || currentTurn !== 'ice';
     else if (kind === 'program') {
       button.dataset.programId = attackProgram?.id || '';
-      button.disabled = role !== 'runner' || !attackProgram;
+      button.disabled = role !== 'runner' || currentTurn !== 'runner' || !attackProgram;
     }
-    else if (kind === 'extinguish') button.disabled = role !== 'runner' || !state.runner.burning;
-    else button.disabled = role !== 'runner';
+    else if (kind === 'extinguish') button.disabled = role !== 'runner' || currentTurn !== 'runner' || !state.runner.burning;
+    else button.disabled = role !== 'runner' || currentTurn !== 'runner';
   });
   const loadedIce = state.programs.filter(program => program.class === 'Чёрный ЛЁД' && program.target === 'Программы' && !program.destroyed);
-  $('#runnerIceBattleActions').innerHTML = loadedIce.length ? loadedIce.map(program => {
+  $('#runnerIceBattleActions').innerHTML = loadedIce.length ? `<h3>ВАШ ЧЁРНЫЙ ЛЁД // ПРОТИВ ПРОГРАММ</h3>${loadedIce.map(program => {
     const attacked = program.active && program.lastAttackRound === battle.round;
-    const label = program.active ? `ХОД: ${program.name}${attacked ? ' · УЖЕ АТАКОВАЛ' : ''}` : `АКТИВИРОВАТЬ: ${program.name} · 1 ДЕЙСТВИЕ`;
-    return `<button data-runner-ice="${program.id}"${role !== 'runner' || attacked ? ' disabled' : ''}>${esc(label)}<small>АТК ${program.attack} · ЗАЩ ${program.defense} · REZ ${program.currentRez}/${program.rez}</small></button>`;
-  }).join('') : '<p>В Кибердеке нет собственного Чёрного ЛЬДА.</p>';
+    const assignedElsewhere = program.active && program.targetNodeId !== node.id;
+    const label = program.active ? `АТАКА: ${program.name}${attacked ? ' · УЖЕ АТАКОВАЛ' : ''}` : `АКТИВИРОВАТЬ И АТАКОВАТЬ: ${program.name} · 1 ДЕЙСТВИЕ`;
+    const iceTurn = currentTurn === `runnerIce:${program.id}`;
+    const canActivate = !program.active && currentTurn === 'runner' && state.runner.netActionsRemaining > 0;
+    const disabled = role !== 'runner' || attacked || assignedElsewhere || (program.active ? !iceTurn : !canActivate);
+    return `<button data-runner-ice="${program.id}"${disabled ? ' disabled' : ''}>${esc(label)}<small>${assignedElsewhere ? 'НАЗНАЧЕН НА ДРУГУЮ ЦЕЛЬ' : `АТК ${program.attack} · ЗАЩ ${program.defense} · REZ ${program.currentRez}/${program.rez}`}</small></button>`;
+  }).join('')}` : '<p>Загрузите Чёрный ЛЁД против Программ, чтобы активировать его в бою.</p>';
   $$('[data-runner-ice]').forEach(button => button.onclick = () => action('battleAction', { kind: 'runnerIce', programId: button.dataset.runnerIce }));
 }
 
@@ -255,9 +804,6 @@ function renderLog() {
 function fillGmForm() {
   const form = $('#runnerForm');
   ['name', 'interface', 'health', 'maxHealth', 'wallet'].forEach(name => form.elements[name].value = state.runner[name]);
-  const settings = $('#pathfinderSettingsForm');
-  settings.elements.mode.value = state.session.pathfinderReveal?.mode || 'result';
-  settings.elements.table.value = state.session.pathfinderReveal?.table || '';
 }
 
 $('#connectBtn').onclick = () => action('connect', { connected: !state.session.connected });
@@ -323,15 +869,15 @@ function openFunctionCheck(label) {
   const form = $('#rollForm');
   const currentNode = state.nodes.find(node => node.id === state.runner.floorId);
   if (label === 'Бэкдор' && currentNode?.type !== 'Пароль') {
-    toast('Сначала переместитесь на этаж с Паролем.', true);
+    toast('Сначала переместитесь в узел с Паролем.', true);
     return false;
   }
   if (label === 'Управление' && currentNode?.type !== 'Управляющий Узел') {
-    toast('Управление можно применить только на этаже с Управляющим Узлом.', true);
+    toast('Управление можно применить только в узле с Управляющим Узлом.', true);
     return false;
   }
   if (label === 'Опознание' && currentNode?.type !== 'Файл') {
-    toast('Опознание можно применить только на этаже с Файлом.', true);
+    toast('Опознание можно применить только в узле с Файлом.', true);
     return false;
   }
   if (['Разряд', 'Ускользнуть'].includes(label) && !state.battle?.active) {
@@ -339,16 +885,14 @@ function openFunctionCheck(label) {
     return false;
   }
   if (label === 'Вирус') {
-    const lastFloor = Math.max(...state.nodes.map(node => Number(node.floor) || 0));
-    if (currentNode?.floor !== lastFloor) {
-      toast('Вирус можно установить только на последнем этаже Архитектуры.', true);
+    if (!(state.terminalNodeIds || []).includes(currentNode?.id)) {
+      toast('Вирус можно установить только в терминальном узле Архитектуры.', true);
       return false;
     }
   }
   if (label === 'Первопроходец') {
-    const lastRevealed = state.nodes.reduce((max, n) => n.revealed ? Math.max(max, n.floor) : max, 0);
-    if (currentNode?.floor !== lastRevealed) {
-      toast('Первопроходца можно запускать только с последнего открытого этажа.', true);
+    if (!currentNode?.revealed) {
+      toast('Первопроходца можно запускать только из открытого узла.', true);
       return false;
     }
   }
@@ -448,8 +992,8 @@ $('#walletTopUpForm').addEventListener('submit', async event => {
   if (await action('addWalletFunds', { amount })) event.currentTarget.reset();
 });
 $('#nodeForm').addEventListener('submit', event => {
-  event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget));
-  action('addNode', { ...data, dv: Number(data.dv) }); event.currentTarget.reset();
+  event.preventDefault(); const formData = new FormData(event.currentTarget); const data = Object.fromEntries(formData);
+  action('addNode', { ...data, edgeIds: formData.getAll('edgeIds'), dv: Number(data.dv) }); event.currentTarget.reset();
 });
 $('#newNetworkBtn').onclick = () => {
   const form = $('#networkForm');
@@ -471,22 +1015,22 @@ $('#networkForm').addEventListener('submit', async event => {
 $('#nodeEditForm').addEventListener('submit', async event => {
   if (event.submitter?.value === 'cancel') return;
   event.preventDefault();
-  const data = Object.fromEntries(new FormData(event.currentTarget));
+  const formData = new FormData(event.currentTarget);
+  const data = Object.fromEntries(formData);
   const submitter = event.submitter;
   submitter.disabled = true;
-  const ok = await action('updateNode', { ...data, dv: Number(data.dv) });
+  const ok = await action('updateNode', { ...data, edgeIds: formData.getAll('edgeIds'), dv: Number(data.dv) });
   submitter.disabled = false;
   if (ok) $('#nodeDialog').close();
-});
-$('#pathfinderSettingsForm').addEventListener('submit', event => {
-  event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget));
-  action('updatePathfinderReveal', data);
 });
 $('#gmScanForm').addEventListener('submit', event => {
   event.preventDefault();
   const networkIds = new FormData(event.currentTarget).getAll('networkIds');
   action('resolveScan', { networkIds });
 });
+$('#pfResolveBtn').onclick = () => {
+  action('resolvePathfinder', { nodeIds: [...pathfinderSelectedNodeIds] });
+};
 $('#programForm').addEventListener('submit', async event => {
   if (event.submitter?.value === 'cancel') return;
   event.preventDefault();
@@ -499,8 +1043,13 @@ $$('[data-battle-action]').forEach(button => button.onclick = () => action('batt
   programId: button.dataset.programId
 }));
 $('#undoRunnerActionBtn').onclick = () => action('undoRunnerAction');
+$('#nodeInfoMove').onclick = async event => {
+  if (await action('move', { id: event.currentTarget.dataset.nodeId })) $('#nodeInfoDialog').close();
+};
 $('#resetBtn').onclick = () => { if (confirm('Сбросить текущую сессию? Созданные сети сохранятся.')) action('reset'); };
 
+window.addEventListener('resize', () => requestAnimationFrame(drawGraphEdges));
+import('/vendor/topoloom/index.js').then(module => { planarEngine = module; if (state) render(); });
 fetch(`/api/state?role=${role}`).then(response => response.json()).then(data => { state = data; render(); });
 const stream = new EventSource(`/events?role=${role}`);
 stream.addEventListener('state', event => { state = JSON.parse(event.data); $('#syncDot').classList.add('online'); $('#syncLabel').textContent = 'СИНХРОНИЗИРОВАНО'; render(); });

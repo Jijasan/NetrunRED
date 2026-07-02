@@ -1,0 +1,22 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@khalidsaidi/topoloom':
+        specifier: 0.2.7
+        version: 0.2.7
+
+packages:
+
+  '@khalidsaidi/topoloom@0.2.7':
+    resolution: {integrity: sha512-AEwCfhM6gc6Jo41tnHssrJDNcSo5Fka8yA8us5Wx1f/Yq/IU1zlHyzJaIW9Ugh+DCXgzPrQKUoYrzgvP9SMpOQ==}
+
+snapshots:
+
+  '@khalidsaidi/topoloom@0.2.7': {}

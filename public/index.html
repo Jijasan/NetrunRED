@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>НЕТРАН // Архитектура СЕТИ</title>
-  <link rel="stylesheet" href="/style.css?v=programs3">
+  <link rel="stylesheet" href="/style.css?v=terminals1">
 </head>
 <body>
   <div class="noise"></div>
@@ -79,6 +79,10 @@
             <i>VS</i>
             <div><small>ЧЁРНЫЙ ЛЁД</small><strong id="battleIceStats">АТК 0 · ЗАЩ 0</strong><span id="battleInitiativeIce">ВСТРЕЧА 0</span></div>
           </div>
+          <div class="initiative-board">
+            <div class="initiative-head"><span>ОЧЕРЕДЬ ИНИЦИАТИВЫ</span><b id="activeTurnLabel">ХОД НЕТРАННЕРА</b></div>
+            <div id="initiativeQueue" class="initiative-queue"></div>
+          </div>
           <div class="ice-rez-head"><span>REZ ЛЬДА</span><b id="iceRezText">0 / 0</b></div>
           <div class="meter ice-rez"><i id="iceRezMeter"></i></div>
           <p id="battleEffect"></p>
@@ -91,14 +95,6 @@
           </div>
           <div id="runnerIceBattleActions" class="runner-ice-actions"></div>
         </section>
-        <div class="quick-actions">
-          <button data-action-label="Бэкдор">БЭКДОР</button>
-          <button data-action-label="Плащ">ПЛАЩ</button>
-          <button data-action-label="Управление">УПРАВЛЕНИЕ</button>
-          <button data-action-label="Опознание">ОПОЗНАНИЕ</button>
-          <button data-action-label="Первопроходец">ПЕРВОПРОХОДЕЦ</button>
-          <button data-action-label="Вирус">ВИРУС</button>
-        </div>
       </section>
 
       <aside class="right-rail">
@@ -117,35 +113,47 @@
             <button class="primary">+ ПОПОЛНИТЬ</button>
           </form>
           <form id="nodeForm" class="compact-form add-floor">
-            <label>Новый этаж<input name="title" placeholder="Название узла" required></label>
-            <label>Тип<select name="nodeType"><option>Пароль</option><option>Файл</option><option>Управляющий Узел</option><option>Чёрный ЛЁД</option></select></label>
+            <label>Новый узел<input name="title" placeholder="Название узла" required></label>
+            <label>Тип<select name="nodeType"><option>Пароль</option><option>Файл</option><option>Управляющий Узел</option><option>Программа</option></select></label>
             <label>СЛ<input name="dv" type="number" value="8"></label>
-            <label>ЛЁД<select name="iceName"><option>Аспид</option><option>Великан</option><option>Адская Гончая</option></select></label>
-            <button>ДОБАВИТЬ ЭТАЖ</button>
+            <small class="form-hint full">Новый узел подключается ко входу. Изменить связь можно через редактор узла.</small>
+            <button>ДОБАВИТЬ УЗЕЛ</button>
           </form>
-          <form id="pathfinderSettingsForm" class="compact-form pathfinder-settings">
-            <label class="full">Открытие этажей<select name="mode"><option value="result">По результату проверки</option><option value="table">По таблице сети</option></select></label>
-            <label class="full">Таблица результата<textarea name="table" rows="3" placeholder="1-4:1, 5-7:3, 8-9:5, 10+:7"></textarea></label>
-            <small class="form-hint">Формат: диапазон результата : число этажей. Пароль с большей СЛ всё равно остановит обзор.</small>
-            <button>СОХРАНИТЬ ТАБЛИЦУ</button>
-          </form>
+          <div id="pathfinderResolve" class="compact-form pathfinder-resolve hidden">
+            <label class="full">ЗАПРОС ПЕРВОПРОХОДЦА: РЕЗУЛЬТАТ <b id="pfResult">0</b></label>
+            <div id="pfNodeChoices" class="pf-node-choices"></div>
+            <button id="pfResolveBtn" class="primary">ОТКРЫТЬ ВЫБРАННЫЕ НА СХЕМЕ</button>
+            <span id="pfSelectionCount"></span>
+          </div>
           <button id="undoRunnerActionBtn" class="wide">ОТМЕНИТЬ ПОСЛЕДНЕЕ ДЕЙСТВИЕ НЕТРАННЕРА</button>
           <button id="resetBtn" class="danger wide">СБРОСИТЬ СЕССИЮ</button>
         </article>
 
+        <article class="panel actions-card">
+          <div class="panel-title"><span>03</span><h2>СЕТЕВЫЕ ДЕЙСТВИЯ</h2></div>
+          <div class="quick-actions">
+            <button data-action-label="Бэкдор">БЭКДОР</button>
+            <button data-action-label="Плащ">ПЛАЩ</button>
+            <button data-action-label="Управление">УПРАВЛЕНИЕ</button>
+            <button data-action-label="Опознание">ОПОЗНАНИЕ</button>
+            <button data-action-label="Первопроходец">ПЕРВОПРОХОДЕЦ</button>
+            <button data-action-label="Вирус">ВИРУС</button>
+          </div>
+        </article>
+
         <article class="panel log-card">
-          <div class="panel-title"><span>03</span><h2>ЖУРНАЛ СОБЫТИЙ</h2></div>
+          <div class="panel-title"><span>04</span><h2>ЖУРНАЛ СОБЫТИЙ</h2></div>
           <div id="eventLog" class="event-log"></div>
         </article>
 
         <details class="panel rules-card">
-          <summary><span>04</span> КРАТКИЕ ПРАВИЛА</summary>
+          <summary><span>05</span> КРАТКИЕ ПРАВИЛА</summary>
           <div class="rules-body">
             <p><b>Ход:</b> одно Мясное Действие или все доступные Сетевые Действия. Перемещаться можно всегда.</p>
             <p><b>Сетевые Действия:</b> Интерфейс 1–3: 1; 4–6: 2; 7–9: 3; 10: 4.</p>
             <p><b>Проверки:</b> Интерфейс + 1d10 против СЛ. Результат должен превысить СЛ.</p>
             <p><b>Критический d10:</b> при 10 бросьте ещё раз и прибавьте результат; при 1 бросьте ещё раз и вычтите результат.</p>
-            <p><b>Перемещение:</b> можно пройти любое число открытых этажей; Пароли и другие препятствия блокируют путь.</p>
+            <p><b>Перемещение:</b> можно пройти любое число открытых связанных узлов; Пароли и другие препятствия блокируют путь.</p>
             <p><b>Чёрный ЛЁД:</b> при встрече Интерфейс + Скорость + 1d10 против Скорости ЛЬДА + 1d10. При победе ЛЁД немедленно применяет Эффект.</p>
             <p><b>Ускользнуть:</b> один раз за Ход, Интерфейс + 1d10 против Восприятия ЛЬДА + 1d10.</p>
             <p><b>Разряд:</b> Интерфейс + 1d10 против защиты цели + 1d10; при попадании 1d6 урона.</p>
@@ -182,33 +190,43 @@
       <div class="dialog-actions"><button value="cancel" formnovalidate>ОТМЕНА</button><button value="default" class="primary">СОХРАНИТЬ</button></div>
     </form>
   </dialog>
-  <dialog id="programDialog">
-    <form method="dialog" id="programForm">
-      <div class="panel-title"><span>PROG</span><h2>ЗАГРУЗИТЬ ПРОГРАММУ</h2></div>
-      <section id="programGroupStep">
-        <p class="form-hint">Сначала выберите группу Программ.</p>
-        <div id="programGroups" class="program-groups"></div>
-      </section>
-      <section id="programChoiceStep" class="hidden">
-        <div class="program-choice-head"><button id="programGroupBackBtn" type="button">← ГРУППЫ</button><b id="programGroupTitle"></b></div>
-        <p class="form-hint">Выберите Программу. Стоимость будет списана из кошелька при загрузке.</p>
-        <div id="programCatalog" class="program-catalog"></div>
-      </section>
-      <div class="dialog-actions"><button value="cancel" formnovalidate>ОТМЕНА</button><button id="programSubmitBtn" value="default" class="primary hidden">ЗАГРУЗИТЬ · 1 ДЕЙСТВИЕ</button></div>
-    </form>
-  </dialog>
   <dialog id="nodeDialog">
     <form method="dialog" id="nodeEditForm">
       <div class="panel-title"><span>NODE</span><h2>РЕДАКТОР УЗЛА</h2></div>
       <input name="id" type="hidden">
       <label>Название<input name="title" maxlength="120" required></label>
-      <label>Тип<select name="nodeType"><option>Пароль</option><option>Файл</option><option>Управляющий Узел</option><option>Чёрный ЛЁД</option></select></label>
+      <label>Тип<select name="nodeType"><option>Пароль</option><option>Файл</option><option>Управляющий Узел</option><option>Программа</option></select></label>
       <label>СЛ<input name="dv" type="number" min="0" max="30" required></label>
-      <label>ЛЁД<select name="iceName"><option>Аспид</option><option>Великан</option><option>Адская Гончая</option></select></label>
+      <label>Связи<select name="edgeIds" multiple size="6"></select></label>
       <label>Описание<textarea name="details" rows="5" maxlength="1000"></textarea></label>
       <div class="dialog-actions"><button value="cancel" formnovalidate>ОТМЕНА</button><button value="default" class="primary">СОХРАНИТЬ</button></div>
     </form>
   </dialog>
-  <script src="/app.js?v=programs5"></script>
+  <dialog id="nodeInfoDialog" class="node-info-dialog">
+    <form method="dialog">
+      <header class="node-info-head"><div><span id="nodeInfoType"></span><h2 id="nodeInfoTitle"></h2></div><button value="cancel" aria-label="Закрыть">×</button></header>
+      <div id="nodeInfoStatus" class="node-info-status"></div>
+      <div id="nodeInfoStats" class="node-info-stats"></div>
+      <section><small>ОПИСАНИЕ</small><p id="nodeInfoDetails"></p></section>
+      <section id="nodeInfoEffectWrap"><small>ЭФФЕКТ</small><p id="nodeInfoEffect"></p></section>
+      <section><small>СВЯЗИ</small><div id="nodeInfoLinks" class="node-info-links"></div></section>
+      <div class="dialog-actions"><button value="cancel">ЗАКРЫТЬ</button><button id="nodeInfoMove" type="button" class="primary">ПЕРЕМЕСТИТЬСЯ СЮДА</button></div>
+    </form>
+  </dialog>
+  <dialog id="programDialog">
+    <form method="dialog" id="programForm">
+      <div class="panel-title"><span>DL</span><h2>ЗАГРУЗКА ПРОГРАММЫ</h2></div>
+      <div id="programGroupStep">
+        <h3 id="programGroupTitle">КАТЕГОРИИ ПРОГРАММ</h3>
+        <div id="programGroups"></div>
+        <div class="dialog-actions"><button value="cancel" formnovalidate>ОТМЕНА</button></div>
+      </div>
+      <div id="programChoiceStep" class="hidden">
+        <div id="programCatalog"></div>
+        <div class="dialog-actions"><button id="programGroupBackBtn" type="button">НАЗАД</button><button id="programSubmitBtn" value="default" class="primary">ЗАГРУЗИТЬ · 1 ДЕЙСТВИЕ</button></div>
+      </div>
+    </form>
+  </dialog>
+  <script src="/app.js?v=graph14"></script>
 </body>
 </html>
