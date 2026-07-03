@@ -86,12 +86,17 @@
           <div class="ice-rez-head"><span>REZ ЛЬДА</span><b id="iceRezText">0 / 0</b></div>
           <div class="meter ice-rez"><i id="iceRezMeter"></i></div>
           <p id="battleEffect"></p>
+          <div id="battleIrlRequest" class="irl-rolls hidden"></div>
           <div class="battle-actions">
             <button data-battle-action="zap">РАЗРЯД · 1d6</button>
+            <button data-battle-irl="zap">РАЗРЯД · IRL</button>
             <button data-battle-action="program" data-program-id="p2">МЕЧ · 3d6</button>
+            <button data-battle-irl="program" data-program-id="p2">АТАКА ПРОГРАММОЙ · IRL</button>
             <button data-battle-action="slide">УСКОЛЬЗНУТЬ</button>
+            <button data-battle-irl="slide">УСКОЛЬЗНУТЬ · IRL</button>
             <button data-battle-action="extinguish">ПОТУШИТЬ ОГОНЬ</button>
             <button data-battle-action="iceAttack" class="ice-turn">АТАКА ЛЬДА</button>
+            <button data-battle-irl="iceAttack" class="ice-turn">АТАКА ЛЬДА · IRL</button>
           </div>
           <div id="runnerIceBattleActions" class="runner-ice-actions"></div>
         </section>
@@ -105,6 +110,7 @@
             <label>Интерфейс<input name="interface" type="number" min="1" max="10"></label>
             <label>Здоровье<input name="health" type="number" min="0"></label>
             <label>Максимум здоровья<input name="maxHealth" type="number" min="1"></label>
+            <label class="full">Слоты Кибердеки<input name="deckSlots" type="number" min="0" max="100" step="1"></label>
             <label class="full">Баланс кошелька (eb)<input name="wallet" type="number" min="0" step="1"></label>
             <button>ОБНОВИТЬ НЕТРАННЕРА</button>
           </form>
@@ -212,6 +218,14 @@
       <section><small>ОПИСАНИЕ</small><p id="nodeInfoDetails"></p></section>
       <section id="nodeInfoEffectWrap"><small>ЭФФЕКТ</small><p id="nodeInfoEffect"></p></section>
       <section><small>СВЯЗИ</small><div id="nodeInfoLinks" class="node-info-links"></div></section>
+      <section id="encounterRolls" class="irl-rolls hidden">
+        <b>ВСТРЕЧНАЯ ПРОВЕРКА — ФИЗИЧЕСКИЕ БРОСКИ</b>
+        <label>НЕТРАННЕР d10<input id="encounterRunnerD10" type="number" min="1" max="10"></label>
+        <label>КРИТ. d10<input id="encounterRunnerCriticalD10" type="number" min="1" max="10"></label>
+        <label>ЛЁД d10<input id="encounterIceD10" type="number" min="1" max="10"></label>
+        <label>КРИТ. d10<input id="encounterIceCriticalD10" type="number" min="1" max="10"></label>
+        <label class="damage-rolls">УРОН ЗАСАДЫ d6 (через запятую)<input id="encounterDamageRolls" placeholder="6, 3"></label>
+      </section>
       <div id="nodeInfoGmTools" class="node-info-gm-tools hidden">
         <hr>
         <label class="dv-editor">СЛ <input id="nodeInfoDv" type="number" min="0" max="30" step="1"></label>

@@ -45,6 +45,10 @@ function toast(message, error = false) {
 function esc(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }
+function optionalNumber(id) {
+  const value = $(id)?.value?.trim();
+  return value === '' || value == null ? null : Number(value);
+}
 
 function nodeIcon(type) {
   return ({ 'Файл': '▤', 'Пароль': '◇', 'Управляющий Узел': '⌁', 'Программа': '▱' })[type] || '◆';
@@ -286,6 +290,7 @@ function openNodeDetails(nodeId) {
   $('#nodeInfoDetails').textContent = node.details || 'Описание отсутствует.';
   $('#nodeInfoEffect').textContent = node.ice?.effect || '';
   $('#nodeInfoEffectWrap').classList.toggle('hidden', !node.ice?.effect);
+  $('#encounterRolls').classList.toggle('hidden', role !== 'runner' || !node.ice || node.cleared || node.active === false);
   $('#nodeInfoLinks').innerHTML = neighbors.length ? neighbors.map(item => `<span>${esc(item.title)}<small>${esc(item.type)}</small></span>`).join('') : '<span>Нет связей</span>';
   const gmTools = $('#nodeInfoGmTools');
   gmTools.classList.toggle('hidden', role !== 'gm');
@@ -801,17 +806,47 @@ function renderBattle() {
   $('#iceRezMeter').style.width = `${100 * node.currentRez / node.ice.rez}%`;
   $('#battleEffect').textContent = node.ice.effect;
   const attackProgram = state.programs.find(program => program.class === 'Атакующая' && program.target !== 'Нетраннеры' && program.active && !program.destroyed);
+  const pendingRoll = battle.pendingRoll;
   $$('[data-battle-action]').forEach(button => {
     const kind = button.dataset.battleAction;
-    if (kind === 'iceAttack') button.disabled = role !== 'gm' || currentTurn !== 'ice';
+    if (kind === 'iceAttack') button.disabled = Boolean(pendingRoll) || role !== 'gm' || currentTurn !== 'ice';
     else if (kind === 'program') {
       button.dataset.programId = attackProgram?.id || '';
       button.textContent = attackProgram ? `${attackProgram.name.toUpperCase()} · ${attackProgram.catalogId === 'sword' ? '3d6' : '2d6'}` : 'НЕТ АКТИВНОЙ АТАКУЮЩЕЙ ПРОГРАММЫ';
-      button.disabled = role !== 'runner' || currentTurn !== 'runner' || !attackProgram;
+      button.disabled = Boolean(pendingRoll) || role !== 'runner' || currentTurn !== 'runner' || !attackProgram;
     }
-    else if (kind === 'extinguish') button.disabled = role !== 'runner' || currentTurn !== 'runner' || !state.runner.burning;
-    else button.disabled = role !== 'runner' || currentTurn !== 'runner';
+    else if (kind === 'extinguish') button.disabled = Boolean(pendingRoll) || role !== 'runner' || currentTurn !== 'runner' || !state.runner.burning;
+    else button.disabled = Boolean(pendingRoll) || role !== 'runner' || currentTurn !== 'runner';
   });
+  $$('[data-battle-irl]').forEach(button => {
+    const kind = button.dataset.battleIrl;
+    if (kind === 'program') {
+      button.dataset.programId = attackProgram?.id || '';
+      button.disabled = Boolean(pendingRoll) || role !== 'runner' || currentTurn !== 'runner' || !attackProgram;
+    } else if (kind === 'iceAttack') button.disabled = Boolean(pendingRoll) || role !== 'gm' || currentTurn !== 'ice';
+    else button.disabled = Boolean(pendingRoll) || role !== 'runner' || currentTurn !== 'runner';
+  });
+  const irlBox = $('#battleIrlRequest');
+  irlBox.classList.toggle('hidden', !pendingRoll);
+  if (pendingRoll) {
+    const submitted = Boolean(pendingRoll.submissions?.[role]);
+    const attacker = pendingRoll.attackerRole === role;
+    const needsDamage = attacker && ['zap', 'program', 'runnerIce', 'iceAttack'].includes(pendingRoll.kind);
+    irlBox.innerHTML = submitted
+      ? `<b>БРОСОК ПРИНЯТ</b><p>Ожидание ${role === 'runner' ? 'Мастера' : 'Нетраннера'}.</p>`
+      : `<b>${attacker ? 'ВАШ БРОСОК АТАКИ' : 'ВАШ БРОСОК ЗАЩИТЫ'}</b>
+        <label>d10<input id="pendingBattleD10" type="number" min="1" max="10" required></label>
+        <label>КРИТ. d10<input id="pendingBattleCriticalD10" type="number" min="1" max="10"></label>
+        ${needsDamage ? '<label class="damage-rolls">УРОН d6 (через запятую)<input id="pendingBattleDamage" placeholder="6, 3, 4"></label>' : ''}
+        <button id="submitBattleIrlRoll" type="button">ОТПРАВИТЬ БРОСОК</button>`;
+    if (!submitted) $('#submitBattleIrlRoll').onclick = () => {
+      const damage = $('#pendingBattleDamage')?.value.trim();
+      action('submitBattleIrlRoll', {
+        d10: optionalNumber('#pendingBattleD10'), criticalD10: optionalNumber('#pendingBattleCriticalD10'),
+        damageRolls: damage ? damage.split(/[ ,;]+/).filter(Boolean).map(Number) : null
+      });
+    };
+  }
   const loadedIce = state.programs.filter(program => program.class === 'Чёрный ЛЁД' && program.target === 'Программы' && !program.destroyed);
   $('#runnerIceBattleActions').innerHTML = loadedIce.length ? `<h3>ВАШ ЧЁРНЫЙ ЛЁД // ПРОТИВ ПРОГРАММ</h3>${loadedIce.map(program => {
     const attacked = program.active && program.lastAttackRound === battle.round;
@@ -819,10 +854,11 @@ function renderBattle() {
     const label = program.active ? `АТАКА: ${program.name}${attacked ? ' · УЖЕ АТАКОВАЛ' : ''}` : `АКТИВИРОВАТЬ И АТАКОВАТЬ: ${program.name} · 1 ДЕЙСТВИЕ`;
     const iceTurn = currentTurn === `runnerIce:${program.id}`;
     const canActivate = !program.active && currentTurn === 'runner' && state.runner.netActionsRemaining > 0;
-    const disabled = role !== 'runner' || attacked || assignedElsewhere || (program.active ? !iceTurn : !canActivate);
-    return `<button data-runner-ice="${program.id}"${disabled ? ' disabled' : ''}>${esc(label)}<small>${assignedElsewhere ? 'НАЗНАЧЕН НА ДРУГУЮ ЦЕЛЬ' : `АТК ${program.attack} · ЗАЩ ${program.defense} · REZ ${program.currentRez}/${program.rez}`}</small></button>`;
+    const disabled = Boolean(pendingRoll) || role !== 'runner' || attacked || assignedElsewhere || (program.active ? !iceTurn : !canActivate);
+    return `<button data-runner-ice="${program.id}"${disabled ? ' disabled' : ''}>${esc(label)}<small>${assignedElsewhere ? 'НАЗНАЧЕН НА ДРУГУЮ ЦЕЛЬ' : `АТК ${program.attack} · ЗАЩ ${program.defense} · REZ ${program.currentRez}/${program.rez}`}</small></button><button data-runner-ice-irl="${program.id}"${disabled ? ' disabled' : ''}>${esc(program.name)} · IRL</button>`;
   }).join('')}` : '<p>Загрузите Чёрный ЛЁД против Программ, чтобы активировать его в бою.</p>';
   $$('[data-runner-ice]').forEach(button => button.onclick = () => action('battleAction', { kind: 'runnerIce', programId: button.dataset.runnerIce }));
+  $$('[data-runner-ice-irl]').forEach(button => button.onclick = () => action('requestBattleIrlRoll', { kind: 'runnerIce', programId: button.dataset.runnerIceIrl }));
 }
 
 function renderPrograms() {
@@ -849,7 +885,7 @@ function renderLog() {
 
 function fillGmForm() {
   const form = $('#runnerForm');
-  ['name', 'interface', 'health', 'maxHealth', 'wallet'].forEach(name => form.elements[name].value = state.runner[name]);
+  ['name', 'interface', 'health', 'maxHealth', 'deckSlots', 'wallet'].forEach(name => form.elements[name].value = state.runner[name]);
 }
 
 $('#connectBtn').onclick = () => action('connect', { connected: !state.session.connected });
@@ -1030,7 +1066,7 @@ $('#d10Form').addEventListener('submit', async event => {
 });
 $('#runnerForm').addEventListener('submit', event => {
   event.preventDefault(); const data = Object.fromEntries(new FormData(event.currentTarget));
-  action('updateRunner', { ...data, interface: Number(data.interface), health: Number(data.health), maxHealth: Number(data.maxHealth), wallet: Number(data.wallet) });
+  action('updateRunner', { ...data, interface: Number(data.interface), health: Number(data.health), maxHealth: Number(data.maxHealth), deckSlots: Number(data.deckSlots), wallet: Number(data.wallet) });
 });
 $('#walletTopUpForm').addEventListener('submit', async event => {
   event.preventDefault();
@@ -1088,9 +1124,19 @@ $$('[data-battle-action]').forEach(button => button.onclick = () => action('batt
   kind: button.dataset.battleAction,
   programId: button.dataset.programId
 }));
+$$('[data-battle-irl]').forEach(button => button.onclick = () => action('requestBattleIrlRoll', {
+  kind: button.dataset.battleIrl,
+  programId: button.dataset.programId
+}));
 $('#undoRunnerActionBtn').onclick = () => action('undoRunnerAction');
 $('#nodeInfoMove').onclick = async event => {
-  if (await action('move', { id: event.currentTarget.dataset.nodeId })) $('#nodeInfoDialog').close();
+  const encounterDamage = $('#encounterDamageRolls')?.value.trim();
+  if (await action('move', {
+    id: event.currentTarget.dataset.nodeId,
+    runnerD10: optionalNumber('#encounterRunnerD10'), runnerCriticalD10: optionalNumber('#encounterRunnerCriticalD10'),
+    iceD10: optionalNumber('#encounterIceD10'), iceCriticalD10: optionalNumber('#encounterIceCriticalD10'),
+    damageRolls: encounterDamage ? encounterDamage.split(/[ ,;]+/).filter(Boolean).map(Number) : null
+  })) $('#nodeInfoDialog').close();
 };
 $('#resetBtn').onclick = () => { if (confirm('Сбросить текущую сессию? Созданные сети сохранятся.')) action('reset'); };
 
